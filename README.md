@@ -4,7 +4,7 @@ This library is for ecosystem partners that want to implement their own DEX adap
 
 ### Contributing
 
-Implement your own DEX adapter based on [UniswapV2Adapter](src/adapters/uniswap-v2/UniswapV2Adapter.sol) and [UniswapV3Adapter](src/adapters/uniswap-v3/UniswapV3Adapter.sol) and submit a PR to add it to the repository.
+Implement your own DEX adapter based on [UniswapV2Adapter](src/adapters/uniswap-v2/UniswapV2Adapter.sol) and [UniswapV3Adapter](src/adapters/uniswap-v3/UniswapV3Adapter.sol) and submit a PR to add it to the repository. Also, make sure to add tests for your adapter like the ones in [UniswapV2Adapter.t.sol](test/adapters/uniswap-v2/UniswapV2Adapter.t.sol) and [UniswapV3Adapter.t.sol](test/adapters/uniswap-v3/UniswapV3Adapter.t.sol).
 
 Below are few assumptions you must follow before implementing your own adapter:
 
