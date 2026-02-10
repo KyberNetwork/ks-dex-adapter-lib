@@ -1,0 +1,38 @@
+[1]
+endpoint_url = "${RPC_1}"
+[56]
+endpoint_url = "${RPC_56}"
+[137]
+endpoint_url = "${RPC_137}"
+[43114]
+endpoint_url = "${RPC_43114}"
+[42161]
+endpoint_url = "${RPC_42161}"
+[10]
+endpoint_url = "${RPC_10}"
+[59144]
+endpoint_url = "${RPC_59144}"
+[8453]
+endpoint_url = "${RPC_8453}"
+[5000]
+endpoint_url = "${RPC_5000}"
+[80094]
+endpoint_url = "${RPC_80094}"
+[2020]
+endpoint_url = "${RPC_2020}"
+[130]
+endpoint_url = "${RPC_130}"
+[42793]
+endpoint_url = "${RPC_42793}"
+[9745]
+endpoint_url = "${RPC_9745}"
+[999]
+endpoint_url = "${RPC_999}"
+[146]
+endpoint_url = "${RPC_146}"
+[143]
+endpoint_url = "${RPC_143}"
+[4326]
+endpoint_url = "${RPC_4326}"
+[4153]
+endpoint_url = "${RPC_4153}"

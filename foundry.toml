@@ -1,0 +1,23 @@
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+[profile.default]
+optimizer = true
+optimizer_runs = 44_444_444
+verbosity = 3
+via_ir = true
+dynamic_test_linking = true
+ffi = true
+evm_version = 'osaka'
+
+[fuzz]
+runs = 32
+
+[fmt]
+line_length = 100
+tab_width = 2
+quote_style = 'single'
+number_underscore = 'thousands'
+sort_imports = true
+
+[lint]
+lint_on_build = false
