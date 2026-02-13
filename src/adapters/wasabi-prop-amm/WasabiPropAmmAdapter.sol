@@ -11,6 +11,8 @@ contract WasabiPropAmmAdapter {
   using TokenHelper for address;
   using CalldataDecoder for bytes;
 
+  error InvalidMsgValue();
+
   address public immutable WETH;
 
   constructor(address _weth) {
@@ -33,7 +35,10 @@ contract WasabiPropAmmAdapter {
 
     // Wrap native ETH to WETH if needed
     if (tokenIn.isNative()) {
+      if (msg.value != amountIn) revert InvalidMsgValue();
       IWETH(WETH).deposit{value: amountIn}();
+    } else if (msg.value != 0) {
+      revert InvalidMsgValue();
     }
 
     // Approve pool to pull tokenIn from this adapter

@@ -99,11 +99,15 @@ contract WasabiPropAmmAdapterTest is Test {
     _warpToFreshOracle();
 
     amountIn = bound(amountIn, 1e15, 1e18);
-    deal(address(adapter), amountIn);
+    deal(address(this), amountIn);
 
     bytes memory data = abi.encode(pool);
-    (uint256 amountUnused, uint256 amountOut) = adapter.executeWasabiPropAmm(
-      data, amountIn, TokenHelper.NATIVE_ADDRESS, BASE_USDC, recipient
+    (uint256 amountUnused, uint256 amountOut) = adapter.executeWasabiPropAmm{value: amountIn}(
+      data,
+      amountIn,
+      TokenHelper.NATIVE_ADDRESS,
+      BASE_USDC,
+      recipient
     );
 
     assertEq(amountUnused, 0);
@@ -113,6 +117,35 @@ contract WasabiPropAmmAdapterTest is Test {
     // No remaining ETH or WETH in adapter
     assertEq(address(adapter).balance, 0);
     assertEq(BASE_WETH.balanceOf(address(adapter)), 0);
+  }
+
+  function test_executeWasabiPropAmm_revertsOnInvalidMsgValue() public {
+    vm.assume(pool != address(0));
+    _warpToFreshOracle();
+
+    uint256 amountIn = 1e17;
+    deal(address(this), amountIn);
+
+    bytes memory data = abi.encode(pool);
+
+    vm.expectRevert(WasabiPropAmmAdapter.InvalidMsgValue.selector);
+    adapter.executeWasabiPropAmm{value: amountIn - 1}(
+      data,
+      amountIn,
+      TokenHelper.NATIVE_ADDRESS,
+      BASE_USDC,
+      recipient
+    );
+
+    deal(BASE_USDC, address(adapter), 1e6);
+    vm.expectRevert(WasabiPropAmmAdapter.InvalidMsgValue.selector);
+    adapter.executeWasabiPropAmm{value: 1}(
+      data,
+      1e6,
+      BASE_USDC,
+      BASE_WETH,
+      recipient
+    );
   }
 
   function test_executeWasabiPropAmm_nativeETHOut(uint256 amountIn) public {
