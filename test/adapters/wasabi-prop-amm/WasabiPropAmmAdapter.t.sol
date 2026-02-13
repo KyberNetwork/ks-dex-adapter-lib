@@ -40,9 +40,10 @@ contract WasabiPropAmmAdapterTest is Test {
   address recipient = makeAddr('recipient');
 
   string RPC_URL = 'https://mainnet.base.org';
+  uint256 BLOCK_NUMBER = 42_026_331;
 
   function setUp() public {
-    vm.createSelectFork(RPC_URL);
+    vm.createSelectFork(RPC_URL, BLOCK_NUMBER);
 
     adapter = new WasabiPropAmmAdapter(BASE_WETH);
     pool = ITestPropPoolFactory(FACTORY).getPropPool(BASE_WETH);
