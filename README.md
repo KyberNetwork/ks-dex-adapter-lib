@@ -15,3 +15,6 @@ Below are few assumptions you must follow before implementing your own adapter:
 - Use our libraries [TokenHelper](src/libraries/TokenHelper.sol) to interact with tokens and [CalldataDecoder](src/libraries/CalldataDecoder.sol) to decode calldata whenever possible.
 - If your integration does not transfer the output tokens directly to the recipient, just leave them inside the adapter contract, don't need to explicitly transfer them.
 - The adapter supports native tokens as input and output tokens, through symbolic address `0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE` (`TokenHelper.NATIVE_ADDRESS`).
+- If your integration do not supports native tokens directly, you can simply ignore it.
+
+Also don't forget to [ALLOW EDITS FROM MAINTAINERS IN THE PR SETTINGS](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/allowing-changes-to-a-pull-request-branch-created-from-a-fork).
