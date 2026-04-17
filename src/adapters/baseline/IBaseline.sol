@@ -21,9 +21,4 @@ interface IBaseline {
   function sellTokensExactIn(address bToken, uint256 amountIn, uint256 limitAmount)
     external
     returns (uint256 amountOut, uint256 feesReceived);
-
-  /// @notice Get the reserve token for a bToken
-  /// @param bToken The bToken address
-  /// @return The reserve token address
-  function reserve(address bToken) external view returns (address);
 }
