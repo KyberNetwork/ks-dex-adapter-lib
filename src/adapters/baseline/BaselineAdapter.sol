@@ -10,13 +10,11 @@ contract BaselineAdapter {
   using TokenHelper for address;
   using CalldataDecoder for bytes;
 
-  function executeBaseline(
-    bytes calldata data,
-    uint256 amountIn,
-    address tokenIn,
-    address,
-    address
-  ) external payable returns (uint256 amountUnused, uint256 amountOut) {
+  function executeBaseline(bytes calldata data, uint256 amountIn, address tokenIn, address, address)
+    external
+    payable
+    returns (uint256 amountUnused, uint256 amountOut)
+  {
     (address relay, address bToken, bool isBuy) = _decodeData(data);
 
     // Approve relay to pull tokenIn from this adapter
