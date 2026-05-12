@@ -27,22 +27,22 @@ contract BaselineAdapterTest is Test {
     deal(WETH, address(adapter), amountIn);
 
     (uint256 quotedOut,,) = IBaseline(RELAY).quoteBuyExactIn(B, amountIn);
-    bytes memory data = abi.encode(RELAY, B, true, quotedOut);
+    bytes memory data = abi.encode(RELAY, B, true);
     (uint256 amountUnused, uint256 amountOut) =
       adapter.executeBaseline(data, amountIn, WETH, B, recipient);
 
     assertEq(amountOut, quotedOut);
+    assertEq(amountUnused, 0);
     assertEq(B.balanceOf(address(adapter)), amountOut);
-    assertEq(WETH.balanceOf(address(adapter)), amountUnused);
+    assertEq(WETH.balanceOf(address(adapter)), 0);
   }
 
   function test_executeSell() public {
     uint256 buyAmount = 0.01 ether;
     deal(WETH, address(adapter), buyAmount);
 
-    (uint256 quotedOut,,) = IBaseline(RELAY).quoteBuyExactIn(B, buyAmount);
-    bytes memory buyData = abi.encode(RELAY, B, true, quotedOut);
-    (uint256 buyDust, uint256 tb5Amount) = adapter.executeBaseline(buyData, buyAmount, WETH, B, recipient);
+    bytes memory buyData = abi.encode(RELAY, B, true);
+    (, uint256 tb5Amount) = adapter.executeBaseline(buyData, buyAmount, WETH, B, recipient);
 
     bytes memory sellData = abi.encode(RELAY, B, false);
     (uint256 amountUnused, uint256 amountOut) =
@@ -50,7 +50,7 @@ contract BaselineAdapterTest is Test {
 
     assertEq(amountUnused, 0);
     assertGt(amountOut, 0);
-    assertEq(WETH.balanceOf(address(adapter)), amountOut + buyDust);
+    assertEq(WETH.balanceOf(address(adapter)), amountOut);
     assertEq(B.balanceOf(address(adapter)), 0);
   }
 
@@ -59,25 +59,23 @@ contract BaselineAdapterTest is Test {
     uint256 amountIn = 0.01 ether;
     deal(WETH, address(adapter), amountIn);
 
-    (uint256 quotedOut,,) = IBaseline(RELAY).quoteBuyExactIn(B, amountIn);
-    bytes memory buyData = abi.encode(RELAY, B, true, quotedOut);
-    (uint256 buyDust, uint256 tb5Received) = adapter.executeBaseline(buyData, amountIn, WETH, B, recipient);
+    bytes memory buyData = abi.encode(RELAY, B, true);
+    (, uint256 tb5Received) = adapter.executeBaseline(buyData, amountIn, WETH, B, recipient);
 
     bytes memory sellData = abi.encode(RELAY, B, false);
     (, uint256 wethReturned) = adapter.executeBaseline(sellData, tb5Received, B, WETH, recipient);
 
-    uint256 totalWethRecovered = wethReturned + buyDust;
     // Roundtrip should lose some reserve to fees/spread but never gain
-    assertLt(totalWethRecovered, amountIn);
+    assertLt(wethReturned, amountIn);
     // Sanity: shouldn't lose more than 20% on a small trade
-    assertGt(totalWethRecovered, (amountIn * 80) / 100);
+    assertGt(wethReturned, (amountIn * 80) / 100);
     // No leftover bTokens
     assertEq(B.balanceOf(address(adapter)), 0);
   }
 
   /// @notice Zero-amount buy reverts
-  function test_revert_buy_zeroAmountOut() public {
-    bytes memory data = abi.encode(RELAY, B, true, uint256(0));
+  function test_revert_buy_zeroAmountIn() public {
+    bytes memory data = abi.encode(RELAY, B, true);
     vm.expectRevert();
     adapter.executeBaseline(data, 0, WETH, B, recipient);
   }
@@ -94,8 +92,7 @@ contract BaselineAdapterTest is Test {
     uint256 amountIn = 0.01 ether;
     deal(WETH, address(adapter), amountIn / 10);
 
-    (uint256 quotedOut,,) = IBaseline(RELAY).quoteBuyExactIn(B, amountIn);
-    bytes memory data = abi.encode(RELAY, B, true, quotedOut);
+    bytes memory data = abi.encode(RELAY, B, true);
     vm.expectRevert();
     adapter.executeBaseline(data, amountIn, WETH, B, recipient);
   }
@@ -106,7 +103,7 @@ contract BaselineAdapterTest is Test {
     uint256 amountIn = 0.01 ether;
     deal(WETH, address(adapter), amountIn);
 
-    bytes memory data = abi.encode(RELAY, fakeToken, true, uint256(1e18));
+    bytes memory data = abi.encode(RELAY, fakeToken, true);
     vm.expectRevert();
     adapter.executeBaseline(data, amountIn, WETH, fakeToken, recipient);
   }
@@ -117,13 +114,14 @@ contract BaselineAdapterTest is Test {
     deal(WETH, address(adapter), amountIn);
 
     (uint256 quotedOut,,) = IBaseline(RELAY).quoteBuyExactIn(B, amountIn);
-    bytes memory data = abi.encode(RELAY, B, true, quotedOut);
+    bytes memory data = abi.encode(RELAY, B, true);
     (uint256 amountUnused, uint256 amountOut) =
       adapter.executeBaseline(data, amountIn, WETH, B, recipient);
 
     assertEq(amountOut, quotedOut);
+    assertEq(amountUnused, 0);
     assertEq(B.balanceOf(address(adapter)), amountOut);
-    assertEq(WETH.balanceOf(address(adapter)), amountUnused);
+    assertEq(WETH.balanceOf(address(adapter)), 0);
   }
 
   /// @notice Back-to-back swaps must not break on leftover allowances (USDT-style reset path)
@@ -131,15 +129,12 @@ contract BaselineAdapterTest is Test {
     uint256 amountIn = 0.005 ether;
 
     deal(WETH, address(adapter), amountIn);
-    (uint256 quotedOut1,,) = IBaseline(RELAY).quoteBuyExactIn(B, amountIn);
-    bytes memory data = abi.encode(RELAY, B, true, quotedOut1);
+    bytes memory data = abi.encode(RELAY, B, true);
     adapter.executeBaseline(data, amountIn, WETH, B, recipient);
 
     deal(WETH, address(adapter), amountIn);
-    (uint256 quotedOut2,,) = IBaseline(RELAY).quoteBuyExactIn(B, amountIn);
-    bytes memory data2 = abi.encode(RELAY, B, true, quotedOut2);
-    (, uint256 amountOut) =
-      adapter.executeBaseline(data2, amountIn, WETH, B, recipient);
+    bytes memory data2 = abi.encode(RELAY, B, true);
+    (, uint256 amountOut) = adapter.executeBaseline(data2, amountIn, WETH, B, recipient);
 
     assertGt(amountOut, 0);
   }
