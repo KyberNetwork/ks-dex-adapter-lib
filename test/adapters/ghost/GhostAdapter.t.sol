@@ -25,34 +25,43 @@ contract GhostAdapterTest is Test {
     adapter = new GhostAdapter();
   }
 
-  function test_executeGhost(uint256 amount, bool usdcToUsdt) public {
+  function test_executeGhost(uint256 amountIn, bool usdcToUsdt) public {
     address sourceRouter = usdcToUsdt ? USDC_ROUTER : USDT_ROUTER;
     address targetRouter = usdcToUsdt ? USDT_ROUTER : USDC_ROUTER;
     address tokenIn = usdcToUsdt ? USDC : USDT;
     address tokenOut = usdcToUsdt ? USDT : USDC;
 
-    amount = bound(amount, 1e6, 100_000_000e6);
+    amountIn = bound(amountIn, 1, 100_000_000_000e6);
 
-    deal(tokenOut, targetRouter, amount * 2);
-
-    uint32 domain = ICrossCollateralRouter(sourceRouter).localDomain();
-    bytes32 targetRouterBytes32 = bytes32(uint256(uint160(targetRouter)));
-    bytes32 recipientBytes32 = bytes32(uint256(uint160(recipient)));
-
-    Quote[] memory quotes = ICrossCollateralRouter(sourceRouter).quoteTransferRemoteTo(
-      domain, recipientBytes32, amount, targetRouterBytes32
-    );
-    uint256 amountIn = quotes[1].amount;
-
+    deal(tokenOut, targetRouter, amountIn * 2);
     deal(tokenIn, address(adapter), amountIn);
 
-    bytes memory data = abi.encode(sourceRouter, targetRouterBytes32, amount);
+    bytes memory data = abi.encode(sourceRouter, targetRouter);
 
     (uint256 amountUnused, uint256 amountOut) =
       adapter.executeGhost(data, amountIn, tokenIn, tokenOut, recipient);
 
-    assertEq(amountUnused, 0);
+    assertLe(amountUnused, 1, 'inverse fee dust exceeds 1 wei');
     assertEq(amountOut, tokenOut.balanceOf(recipient));
     assertGt(amountOut, 0);
+  }
+
+  function test_noExternalFee(bool usdcToUsdt) public view {
+    address sourceRouter = usdcToUsdt ? USDC_ROUTER : USDT_ROUTER;
+    address targetRouter = usdcToUsdt ? USDT_ROUTER : USDC_ROUTER;
+
+    uint32 domain = ICrossCollateralRouter(sourceRouter).localDomain();
+    bytes32 targetBytes32 = bytes32(uint256(uint160(targetRouter)));
+    bytes32 recipientBytes32 = bytes32(uint256(uint160(recipient)));
+
+    Quote[] memory quotes = ICrossCollateralRouter(sourceRouter)
+      .quoteTransferRemoteTo(domain, recipientBytes32, 1_000_000, targetBytes32);
+
+    // quotes[0] = gas (0 for same-domain), quotes[1] = principal + protocolFee,
+    // quotes[2] = externalFee. Adapter only inverts the protocol fee, so external
+    // fee must be 0 for correctness.
+    assertEq(quotes.length, 3, 'unexpected quote length');
+    assertEq(quotes[0].amount, 0, 'gas fee should be 0 for same-domain');
+    assertEq(quotes[2].amount, 0, 'external fee must be 0');
   }
 }

@@ -22,4 +22,6 @@ interface ICrossCollateralRouter {
   ) external view returns (Quote[] memory quotes);
 
   function localDomain() external view returns (uint32);
+
+  function feeRecipient() external view returns (address);
 }
