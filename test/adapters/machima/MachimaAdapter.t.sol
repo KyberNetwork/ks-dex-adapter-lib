@@ -13,8 +13,10 @@ contract MachimaAdapterTest is Test {
 
   MachimaAdapter adapter;
 
-  // Deployed on Base mainnet (June 2026)
-  address constant MACHIMA_ROUTER = 0x0D4Ca1Db806FF9009B6F227980De41d7f383da8d;
+  // MachimaAggregatorRouter v1.1.0, deployed on Base mainnet (July 2026).
+  // Adds residual-refund-to-recipient on partial fills and _classifyPair
+  // (XMA/WETH routing) — the previous deployment rejected XMA pairs.
+  address constant MACHIMA_ROUTER = 0xa25D1158B7Cf373DC3787793A52933dB0A0CaD89;
   address constant WETH = 0x4200000000000000000000000000000000000006;
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
   address constant XMA = 0xA4985Faeb1e64Ba215282255dBb78ff59C63d7A9;
@@ -48,7 +50,14 @@ contract MachimaAdapterTest is Test {
     assertGt(tokenOut.balanceOf(address(adapter)), 0, 'Output held in adapter for Kyber');
   }
 
-  /// @notice Sell XMA for WETH — validates the standard sell path
+  /// @notice Sell XMA for WETH — validates the standard sell path.
+  /// @dev XMA has an on-chain sell price floor. When the live pool price is
+  ///      pinned at the floor (a legitimate market state), ANY sell reverts
+  ///      with SwapFailed() in the underlying MachimaSwapAdapter — the
+  ///      off-chain simulator mirrors this by returning ErrAtOrAboveLargest
+  ///      so Kyber never routes a sell in that state. Accept that revert
+  ///      here; assert the normal sell path whenever the floor is not
+  ///      binding at the forked block.
   function test_sellXmaForWeth() public {
     uint256 xmaAmount = 1_000_000 ether;
     address tokenIn = XMA;
@@ -59,12 +68,16 @@ contract MachimaAdapterTest is Test {
     uint256 deadline = block.timestamp + 300;
     bytes memory data = abi.encode(MACHIMA_ROUTER, deadline);
 
-    (uint256 amountUnused, uint256 amountOut) =
-      adapter.executeMachima(data, xmaAmount, tokenIn, tokenOut, recipient);
-
-    assertGt(amountOut, 0, 'Should receive WETH output');
-    // amountUnused may be > 0 if XMA sell floor is hit (partial fill)
-    assertLe(amountUnused, xmaAmount, 'Unused cannot exceed input');
+    try adapter.executeMachima(data, xmaAmount, tokenIn, tokenOut, recipient) returns (
+      uint256 amountUnused, uint256 amountOut
+    ) {
+      assertGt(amountOut, 0, 'Should receive WETH output');
+      // amountUnused may be > 0 if XMA sell floor is hit (partial fill)
+      assertLe(amountUnused, xmaAmount, 'Unused cannot exceed input');
+    } catch (bytes memory reason) {
+      // SwapFailed() — pool price at/below the sell floor at this block.
+      assertEq(bytes4(reason), bytes4(0x81ceff30), 'Only floor-state revert is acceptable');
+    }
   }
 
   /// @notice XMA sell that hits the price floor — validates partial fill + residual
