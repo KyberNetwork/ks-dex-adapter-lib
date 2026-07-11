@@ -23,11 +23,8 @@ contract MachimaAdapterTest is Test {
 
   address recipient = makeAddr('recipient');
 
-  string RPC_URL = 'https://mainnet.base.org';
-
   function setUp() public {
-    // Fork at latest — router was deployed June 2026
-    vm.createSelectFork(RPC_URL);
+    vm.createSelectFork(vm.envString('RPC_8453'));
     adapter = new MachimaAdapter();
   }
 

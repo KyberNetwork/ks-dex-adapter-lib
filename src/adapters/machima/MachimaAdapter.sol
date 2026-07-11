@@ -39,14 +39,15 @@ contract MachimaAdapter {
     tokenIn.forceApprove(router, amountIn);
 
     // Execute the swap — tax is applied internally by MachimaSwapAdapter
-    amountOut = IMachimaAggregatorRouter(router).swap(
-      tokenIn,
-      tokenOut,
-      amountIn,
-      0, // minOut enforced by KyberSwap's routing layer
-      address(this), // receive here; Kyber handles forwarding
-      deadline
-    );
+    amountOut = IMachimaAggregatorRouter(router)
+      .swap(
+        tokenIn,
+        tokenOut,
+        amountIn,
+        0, // minOut enforced by KyberSwap's routing layer
+        address(this), // receive here; Kyber handles forwarding
+        deadline
+      );
 
     // Check for residual tokenIn (XMA sell floor partial fills)
     uint256 tokenInRemaining = tokenIn.balanceOf(address(this));
