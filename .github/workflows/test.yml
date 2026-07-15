@@ -9,6 +9,19 @@ on:
 
 env:
   FOUNDRY_PROFILE: ci
+  RPC_137: ${{ secrets.RPC_137 }}
+  RPC_1: ${{ secrets.RPC_1 }}
+  RPC_42161: ${{ secrets.RPC_42161 }}
+  RPC_10: ${{ secrets.RPC_10 }}
+  RPC_43114: ${{ secrets.RPC_43114 }}
+  RPC_56: ${{ secrets.RPC_56 }}
+  RPC_59144: ${{ secrets.RPC_59144 }}
+  RPC_8453: ${{ secrets.RPC_8453 }}
+  RPC_146: ${{ secrets.RPC_146 }}
+  RPC_80094: ${{ secrets.RPC_80094 }}
+  RPC_2020: ${{ secrets.RPC_2020 }}
+  RPC_5000: ${{ secrets.RPC_5000 }}
+  RPC_143: ${{ secrets.RPC_143 }}
 
 jobs:
   check:
