@@ -21,3 +21,26 @@ sort_imports = true
 
 [lint]
 lint_on_build = false
+
+[rpc_endpoints]
+mainnet = "${RPC_1}"
+bsc_mainnet = "${RPC_56}"
+polygon_mainnet = "${RPC_137}"
+avalanche_mainnet = "${RPC_43114}"
+arbitrum_mainnet = "${RPC_42161}"
+optimism_mainnet = "${RPC_10}"
+linea_mainnet = "${RPC_59144}"
+base_mainnet = "${RPC_8453}"
+mantle_mainnet = "${RPC_5000}"
+bera_mainnet = "${RPC_80094}"
+ronin_mainnet = "${RPC_2020}"
+uni_mainnet = "${RPC_130}"
+etherlink_mainnet = "${RPC_42793}"
+plasma_mainnet = "${RPC_9745}"
+hyperevm_mainnet = "${RPC_999}"
+sonic_mainnet = "${RPC_146}"
+monad_mainnet = "${RPC_143}"
+monad_testnet = "${RPC_10143}"
+megaeth_mainnet = "${RPC_4326}"
+rise_mainnet = "${RPC_4153}"
+robinhood_mainnet = "${RPC_4663}"

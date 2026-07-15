@@ -20,7 +20,7 @@ contract UniswapV3AdapterTest is Test {
   uint256 BLOCK_NUMBER = 24_425_629;
 
   function setUp() public {
-    vm.createSelectFork(RPC_URL, BLOCK_NUMBER);
+    vm.createSelectFork('mainnet', BLOCK_NUMBER);
 
     adapter = new UniswapV3Adapter();
   }
