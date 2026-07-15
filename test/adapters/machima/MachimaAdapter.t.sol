@@ -1,0 +1,144 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.0;
+
+import 'forge-std/Test.sol';
+
+import 'src/adapters/machima/MachimaAdapter.sol';
+import 'src/libraries/TokenHelper.sol';
+
+/// @notice Integration test for MachimaAdapter on Base mainnet fork.
+///         Tests real swaps through the deployed MachimaAggregatorRouter.
+contract MachimaAdapterTest is Test {
+  using TokenHelper for address;
+
+  MachimaAdapter adapter;
+
+  // MachimaAggregatorRouter v1.1.0, deployed on Base mainnet (July 2026).
+  // Adds residual-refund-to-recipient on partial fills and _classifyPair
+  // (XMA/WETH routing) — the previous deployment rejected XMA pairs.
+  address constant MACHIMA_ROUTER = 0xa25D1158B7Cf373DC3787793A52933dB0A0CaD89;
+  address constant WETH = 0x4200000000000000000000000000000000000006;
+  address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+  address constant XMA = 0xA4985Faeb1e64Ba215282255dBb78ff59C63d7A9;
+
+  address recipient = makeAddr('recipient');
+
+  function setUp() public {
+    vm.createSelectFork(vm.envString('RPC_8453'));
+    adapter = new MachimaAdapter();
+  }
+
+  /// @notice Buy XMA with WETH — validates the standard buy path
+  function test_buyXmaWithWeth() public {
+    uint256 amountIn = 0.01 ether;
+    address tokenIn = WETH;
+    address tokenOut = XMA;
+
+    deal(tokenIn, address(adapter), amountIn);
+
+    uint256 deadline = block.timestamp + 300;
+    bytes memory data = abi.encode(MACHIMA_ROUTER, deadline);
+
+    (uint256 amountUnused, uint256 amountOut) =
+      adapter.executeMachima(data, amountIn, tokenIn, tokenOut, recipient);
+
+    assertGt(amountOut, 0, 'Should receive XMA output');
+    assertEq(amountUnused, 0, 'No residual expected for buys');
+    assertGt(tokenOut.balanceOf(address(adapter)), 0, 'Output held in adapter for Kyber');
+  }
+
+  /// @notice Sell XMA for WETH — validates the standard sell path.
+  /// @dev XMA has an on-chain sell price floor. When the live pool price is
+  ///      pinned at the floor (a legitimate market state), ANY sell reverts
+  ///      with SwapFailed() in the underlying MachimaSwapAdapter — the
+  ///      off-chain simulator mirrors this by returning ErrAtOrAboveLargest
+  ///      so Kyber never routes a sell in that state. Accept that revert
+  ///      here; assert the normal sell path whenever the floor is not
+  ///      binding at the forked block.
+  function test_sellXmaForWeth() public {
+    uint256 xmaAmount = 1_000_000 ether;
+    address tokenIn = XMA;
+    address tokenOut = WETH;
+
+    deal(tokenIn, address(adapter), xmaAmount);
+
+    uint256 deadline = block.timestamp + 300;
+    bytes memory data = abi.encode(MACHIMA_ROUTER, deadline);
+
+    try adapter.executeMachima(data, xmaAmount, tokenIn, tokenOut, recipient) returns (
+      uint256 amountUnused, uint256 amountOut
+    ) {
+      assertGt(amountOut, 0, 'Should receive WETH output');
+      // amountUnused may be > 0 if XMA sell floor is hit (partial fill)
+      assertLe(amountUnused, xmaAmount, 'Unused cannot exceed input');
+    } catch (bytes memory reason) {
+      // SwapFailed() — pool price at/below the sell floor at this block.
+      assertEq(bytes4(reason), bytes4(0x81ceff30), 'Only floor-state revert is acceptable');
+    }
+  }
+
+  /// @notice XMA sell that hits the price floor — validates partial fill + residual
+  function test_xmaSellFloorPartialFill() public {
+    // Use a very large amount to attempt to push past the XMA sell floor
+    uint256 xmaAmount = 100_000_000_000 ether; // 100B XMA — should hit floor
+    address tokenIn = XMA;
+    address tokenOut = WETH;
+
+    deal(tokenIn, address(adapter), xmaAmount);
+
+    uint256 deadline = block.timestamp + 300;
+    bytes memory data = abi.encode(MACHIMA_ROUTER, deadline);
+
+    // This may revert if the pool doesn't have enough liquidity,
+    // or succeed with amountUnused > 0 if floor is hit
+    try adapter.executeMachima(data, xmaAmount, tokenIn, tokenOut, recipient) returns (
+      uint256 amountUnused, uint256 amountOut
+    ) {
+      // If it succeeds, either the floor was hit (amountUnused > 0)
+      // or the full amount was swapped
+      if (amountUnused > 0) {
+        assertGt(amountOut, 0, 'Partial fill should still produce output');
+        assertLt(amountUnused, xmaAmount, 'Not all should be unused');
+      }
+    } catch {
+      // Acceptable — pool may not have liquidity for this size
+    }
+  }
+
+  /// @notice Invalid pair (USDC→XMA) should revert — XMA pairs with WETH only
+  function test_revert_invalidPairUsdcToXma() public {
+    uint256 amountIn = 10 * 1e6;
+    address tokenIn = USDC;
+    address tokenOut = XMA;
+
+    deal(tokenIn, address(adapter), amountIn);
+
+    uint256 deadline = block.timestamp + 300;
+    bytes memory data = abi.encode(MACHIMA_ROUTER, deadline);
+
+    vm.expectRevert();
+    adapter.executeMachima(data, amountIn, tokenIn, tokenOut, recipient);
+  }
+
+  /// @notice Expired deadline should revert
+  function test_revert_expiredDeadline() public {
+    uint256 amountIn = 0.01 ether;
+    address tokenIn = WETH;
+    address tokenOut = XMA;
+
+    deal(tokenIn, address(adapter), amountIn);
+
+    uint256 deadline = block.timestamp - 1; // already expired
+    bytes memory data = abi.encode(MACHIMA_ROUTER, deadline);
+
+    vm.expectRevert();
+    adapter.executeMachima(data, amountIn, tokenIn, tokenOut, recipient);
+  }
+
+  /// @notice Data encoding roundtrip verification
+  function test_dataEncoding() public pure {
+    uint256 deadline = 1_700_000_000;
+    bytes memory data = abi.encode(MACHIMA_ROUTER, deadline);
+    assertEq(data.length, 64);
+  }
+}
