@@ -18,5 +18,5 @@ Below are a few assumptions you must follow before implementing your own adapter
 - If your integration does not support native tokens directly, you can simply ignore it.
 
 When submitting a PR, make sure the following are true:
-- The fork branch needs to be owned by a **NORMAL USER**, not an **ORGANIZATION**.
+- The fork branch is owned by a **NORMAL USER**, not an **ORGANIZATION**.
 - [**ALLOW EDITS FROM MAINTAINERS**](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/allowing-changes-to-a-pull-request-branch-created-from-a-fork) from the PR's settings is enabled.
