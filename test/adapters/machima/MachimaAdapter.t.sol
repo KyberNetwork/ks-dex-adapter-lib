@@ -24,7 +24,7 @@ contract MachimaAdapterTest is Test {
   address recipient = makeAddr('recipient');
 
   function setUp() public {
-    vm.createSelectFork(vm.envString('RPC_8453'));
+    vm.createSelectFork('base_mainnet');
     adapter = new MachimaAdapter();
   }
 

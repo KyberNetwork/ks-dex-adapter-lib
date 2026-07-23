@@ -43,7 +43,7 @@ contract WasabiPropAmmAdapterTest is Test {
   uint256 BLOCK_NUMBER = 42_026_331;
 
   function setUp() public {
-    vm.createSelectFork(RPC_URL, BLOCK_NUMBER);
+    vm.createSelectFork('base_mainnet', BLOCK_NUMBER);
 
     adapter = new WasabiPropAmmAdapter();
     pool = ITestPropPoolFactory(FACTORY).getPropPool(BASE_WETH);
