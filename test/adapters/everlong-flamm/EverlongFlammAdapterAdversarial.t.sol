@@ -455,17 +455,25 @@ contract EverlongFlammAdapterAdversarialTest is Test {
   }
 
   /// @dev `data` shorter than two words is refused by name. `decodeUint256(1)` reads calldata
-  /// unchecked, so a one-word blob would otherwise read whatever follows it — zero at the end
-  /// of the calldata — as venue 0 and silently run the swap venue.
+  /// unchecked, so word 1 of a short blob is whatever follows it, left-aligned and padded with
+  /// the zeros past the end of the calldata. At 32 bytes or fewer that is zero, which would
+  /// silently run the swap venue; from 33 to 63 bytes the word is partly in range, so a
+  /// trailing 0x00 still reads venue 0 while a trailing 0x01 reads `1 << 248`, which
+  /// `venue > VENUE_LEVERAGE` would refuse for the wrong reason. The blobs below cover all
+  /// three shapes.
   function test_shortData_reverts() public {
     MockFlamm pool = _pool();
     pool.configure(AMOUNT_IN, AMOUNT_IN, 0, 7);
     poolAsset.mint(address(adapter), AMOUNT_IN);
 
-    bytes[3] memory blobs = [
-      abi.encodePacked(bytes32(uint256(uint160(address(pool))))),
-      abi.encodePacked(bytes31(bytes32(uint256(uint160(address(pool)))))),
-      bytes('')
+    bytes32 word0 = bytes32(uint256(uint160(address(pool))));
+    bytes[6] memory blobs = [
+      abi.encodePacked(word0), // 32: word 1 entirely past the end
+      abi.encodePacked(bytes31(word0)), // 31: word 0 itself truncated
+      bytes(''), // 0
+      abi.encodePacked(word0, bytes1(0x00)), // 33: word 1 partly in range, reads 0
+      abi.encodePacked(word0, bytes1(0x01)), // 33: word 1 partly in range, reads 1 << 248
+      abi.encodePacked(word0, bytes31(0)) // 63: one byte short of a second word
     ];
     for (uint256 i; i < blobs.length; i++) {
       assertLt(blobs[i].length, 64);

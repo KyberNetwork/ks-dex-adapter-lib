@@ -51,8 +51,21 @@ contract EverlongFlammAdapterTest is Test {
   uint256 buyMin;
   uint256 buyMax;
 
+  /// @dev This suite reads `RPC_8453` itself, with the public endpoint as a default, rather
+  /// than `foundry.toml`'s `base_mainnet` alias, which resolves to the same variable but has
+  /// no default. An empty value counts as unset: `test.yml` declares `RPC_8453` from a secret
+  /// at workflow level, and GitHub renders an unavailable secret as the empty string on a
+  /// `pull_request` run raised from a fork, so `envOr`'s default alone is never reached there.
+  /// Both pinned blocks are served by the public endpoint; a reviewer holding an archive
+  /// endpoint should set `RPC_8453` to it, which is what CI does in the upstream repository.
+  function _forkBase(uint256 blockNumber) private {
+    string memory rpc = vm.envOr('RPC_8453', string(''));
+    if (bytes(rpc).length == 0) rpc = 'https://mainnet.base.org';
+    vm.createSelectFork(rpc, blockNumber);
+  }
+
   function setUp() public {
-    vm.createSelectFork('base_mainnet', PINNED_BLOCK);
+    _forkBase(PINNED_BLOCK);
     adapter = new EverlongFlammAdapter();
     (sellMin, sellMax) = _quotableRange(VENUE_SWAP, true);
     (buyMin, buyMax) = _quotableRange(VENUE_SWAP, false);
@@ -61,7 +74,7 @@ contract EverlongFlammAdapterTest is Test {
   // ------------------------------------------------------------------ swap venue
 
   function test_replaySettledSwap() public {
-    vm.createSelectFork('base_mainnet', SETTLED_SWAP_PARENT_BLOCK);
+    _forkBase(SETTLED_SWAP_PARENT_BLOCK);
     EverlongFlammAdapter replay = new EverlongFlammAdapter();
     deal(CBBTC, address(replay), SETTLED_SELL_IN);
     uint256 recipientBefore = USDC.balanceOf(recipient);
