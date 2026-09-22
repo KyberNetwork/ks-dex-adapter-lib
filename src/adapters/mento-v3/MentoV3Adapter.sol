@@ -1,29 +1,30 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import './IMentoRouter.sol';
+import './IMentoFPMM.sol';
 
 import '../../libraries/CalldataDecoder.sol';
 import '../../libraries/TokenHelper.sol';
 
 /// @title MentoV3Adapter
-/// @notice KyberSwap DEX adapter for Mento V3 fixed-price market makers.
-///         Swaps are executed through Mento's exact-input Router entry point.
-/// @dev The Mento Router resolves the FPMM for a token pair through its
-///      FactoryRegistry and supports a zero factory address for its default
-///      factory. FPMM swaps consume the complete input amount.
+/// @notice KyberSwap DEX adapter for Mento V3 fixed-price market maker (FPMM) pools.
+///         Interacts with the pool directly: transfer the input, quote via the pool's
+///         oracle-priced `getAmountOut`, then call the Uniswap-V2-style `swap`.
+/// @dev FPMM pools price against an oracle rate, so `getAmountOut` is exact and the pool's
+///      value-invariant check accepts it. Tokens are sorted (token0 < token1) by the factory.
+///      FPMM swaps consume the whole input; there is never any unused amount.
 contract MentoV3Adapter {
   using CalldataDecoder for bytes;
   using TokenHelper for address;
 
-  /// @notice Execute a single-hop Mento V3 swap.
-  /// @param data ABI-encoded: (address router, address factory, uint256 amountOutMin, uint256 deadline)
+  /// @notice Execute a single-hop swap on a Mento V3 FPMM pool.
+  /// @param data ABI-encoded: (address pool)
   /// @param amountIn Amount of tokenIn already held by this adapter
   /// @param tokenIn Input token address
   /// @param tokenOut Output token address
   /// @param recipient Recipient of the output tokens
-  /// @return amountUnused Unused input amount; always zero for exact-input FPMM swaps
-  /// @return amountOut Amount of tokenOut received according to the Router quote
+  /// @return amountUnused Always zero
+  /// @return amountOut Amount of tokenOut actually received by the recipient
   function executeMentoV3(
     bytes calldata data,
     uint256 amountIn,
@@ -31,28 +32,25 @@ contract MentoV3Adapter {
     address tokenOut,
     address recipient
   ) external payable returns (uint256 amountUnused, uint256 amountOut) {
-    (address router, address factory, uint256 amountOutMin, uint256 deadline) = _decodeData(data);
+    address pool = _decodeData(data);
 
-    tokenIn.forceApprove(router, amountIn);
+    amountOut = IMentoFPMM(pool).getAmountOut(amountIn, tokenIn);
 
-    IMentoRouter.Route[] memory routes = new IMentoRouter.Route[](1);
-    routes[0] = IMentoRouter.Route({from: tokenIn, to: tokenOut, factory: factory});
+    tokenIn.safeTransfer(pool, amountIn);
 
-    uint256[] memory amounts = IMentoRouter(router)
-      .swapExactTokensForTokens(amountIn, amountOutMin, routes, recipient, deadline);
+    uint256 balanceOutBefore = tokenOut.balanceOf(recipient);
+
+    if (tokenIn < tokenOut) {
+      IMentoFPMM(pool).swap(0, amountOut, recipient, '');
+    } else {
+      IMentoFPMM(pool).swap(amountOut, 0, recipient, '');
+    }
 
     amountUnused = 0;
-    amountOut = amounts[amounts.length - 1];
+    amountOut = tokenOut.balanceOf(recipient) - balanceOutBefore;
   }
 
-  function _decodeData(bytes calldata data)
-    internal
-    pure
-    returns (address router, address factory, uint256 amountOutMin, uint256 deadline)
-  {
-    router = data.decodeAddress(0);
-    factory = data.decodeAddress(1);
-    amountOutMin = data.decodeUint256(2);
-    deadline = data.decodeUint256(3);
+  function _decodeData(bytes calldata data) internal pure returns (address pool) {
+    pool = data.decodeAddress(0);
   }
 }
