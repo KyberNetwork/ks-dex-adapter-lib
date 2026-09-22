@@ -6,6 +6,20 @@ import 'forge-std/Test.sol';
 import '../uniswap-v3/TickMath.sol';
 import 'src/adapters/unitflow-v3/UnitFlowV3Adapter.sol';
 
+contract MaliciousUnitFlowPool {
+  function fee() external pure returns (uint24) {
+    return 100;
+  }
+
+  function swap(address, bool, int256, uint160, bytes calldata data)
+    external
+    returns (int256 amount0, int256 amount1)
+  {
+    IUnitFlowV3SwapCallback(msg.sender).unitFlowV3SwapCallback(1_000_000, 0, data);
+    return (1_000_000, -1_000_000);
+  }
+}
+
 contract UnitFlowV3AdapterTest is Test {
   using TokenHelper for address;
 
@@ -87,6 +101,19 @@ contract UnitFlowV3AdapterTest is Test {
     adapter.unitFlowV3SwapCallback(1_000_000, 0, abi.encode(tokenIn));
 
     assertEq(tokenIn.balanceOf(address(adapter)), 1_000_000);
+  }
+
+  function test_executeUnitFlowV3_revertsForUnregisteredPool() public {
+    address tokenIn = IUniswapV3Pool(POOL).token1();
+    address tokenOut = IUniswapV3Pool(POOL).token0();
+    MaliciousUnitFlowPool maliciousPool = new MaliciousUnitFlowPool();
+    deal(tokenIn, address(adapter), TRANSACTION_AMOUNT_IN);
+
+    bytes memory data = abi.encode(address(maliciousPool), TickMath.MAX_SQRT_RATIO - 1);
+    vm.expectRevert(UnitFlowV3Adapter.InvalidPool.selector);
+    adapter.executeUnitFlowV3(data, TRANSACTION_AMOUNT_IN, tokenIn, tokenOut, recipient);
+
+    assertEq(tokenIn.balanceOf(address(adapter)), TRANSACTION_AMOUNT_IN);
   }
 
   function test_calldataEncoding() public pure {

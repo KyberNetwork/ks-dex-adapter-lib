@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.0;
 
-import '../uniswap-v3/IUniswapV3Pool.sol';
+import './IUnitFlowV3Factory.sol';
+import './IUnitFlowV3Pool.sol';
 import './IUnitFlowV3SwapCallback.sol';
 
 import '../../libraries/CalldataDecoder.sol';
@@ -16,6 +17,9 @@ contract UnitFlowV3Adapter is IUnitFlowV3SwapCallback {
 
   error InvalidCallbackCaller();
   error CallbackInProgress();
+  error InvalidPool();
+
+  address private constant UNITFLOW_FACTORY = 0x5bfBCeb73d39F722B1cB83fD2F11736b28c1Be6d;
 
   address private callbackPool;
 
@@ -38,8 +42,15 @@ contract UnitFlowV3Adapter is IUnitFlowV3SwapCallback {
     if (callbackPool != address(0)) revert CallbackInProgress();
 
     bool zeroForOne = tokenIn < tokenOut;
+    address token0 = zeroForOne ? tokenIn : tokenOut;
+    address token1 = zeroForOne ? tokenOut : tokenIn;
+    uint24 fee = IUnitFlowV3Pool(pool).fee();
+    if (IUnitFlowV3Factory(UNITFLOW_FACTORY).getPool(token0, token1, fee) != pool) {
+      revert InvalidPool();
+    }
+
     callbackPool = pool;
-    (int256 amount0, int256 amount1) = IUniswapV3Pool(pool)
+    (int256 amount0, int256 amount1) = IUnitFlowV3Pool(pool)
       .swap(recipient, zeroForOne, int256(amountIn), sqrtPriceLimitX96, abi.encode(tokenIn));
     callbackPool = address(0);
 
