@@ -33,12 +33,13 @@ contract SpirePropAdapterTest is Test {
   address constant CUSTODY = 0xAaC48FEB93c5C97E0fb3c7C57E1633922A4ACDa3;
   address constant WETH = 0x4200000000000000000000000000000000000006;
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+  address constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
   uint256 constant FORK_BLOCK = 50_979_793;
   SpirePropAdapter adapter;
   address recipient = makeAddr('recipient');
 
   function setUp() public {
-    vm.createSelectFork(vm.envOr('RPC_8453', string('https://mainnet.base.org')), FORK_BLOCK);
+    vm.createSelectFork('base_mainnet', FORK_BLOCK);
     adapter = new SpirePropAdapter();
   }
 
@@ -63,6 +64,7 @@ contract SpirePropAdapterTest is Test {
     assertEq(unused, 0);
     assertEq(amountOut, expected);
     assertEq(tokenIn.balanceOf(address(adapter)), 0);
+    assertEq(IERC20(tokenIn).allowance(address(adapter), ENTRYPOINT), 0);
     assertEq(tokenOut.balanceOf(recipient) - recipientBefore, expected);
     assertEq(tokenIn.balanceOf(CUSTODY), custodyIn + amountIn);
     assertEq(tokenOut.balanceOf(CUSTODY), custodyOut - expected);
@@ -97,7 +99,7 @@ contract SpirePropAdapterTest is Test {
     deal(USDC, address(adapter), 25e6);
     uint64 fillSeq = ISpireCurveView(CURVE).pair(WETH).fillSeq;
     uint256 custodyIn = USDC.balanceOf(CUSTODY);
-    vm.expectRevert();
+    vm.expectPartialRevert(bytes4(keccak256('InsufficientLiquidity(uint256,uint256)')));
     adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 25e6, USDC, WETH, recipient);
     assertEq(USDC.balanceOf(address(adapter)), 25e6);
     assertEq(USDC.balanceOf(CUSTODY), custodyIn);
@@ -105,72 +107,33 @@ contract SpirePropAdapterTest is Test {
     assertEq(ISpireCurveView(CURVE).pair(WETH).fillSeq, fillSeq);
   }
 
-  /// @dev Unexpected output tokens are rejected before transferring the prepaid input.
-  function test_invalidPairPreservesInput() public {
+  /// @dev Spire rejects an input token outside the pair before transferring the prepaid input.
+  function test_unknownTokenInPreservesInput() public {
+    deal(CBBTC, address(adapter), 1e8);
+    uint64 fillSeq = ISpireCurveView(CURVE).pair(WETH).fillSeq;
+    vm.expectRevert(bytes4(keccak256('UnknownToken()')));
+    adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 1e8, CBBTC, USDC, recipient);
+    assertEq(CBBTC.balanceOf(address(adapter)), 1e8);
+    assertEq(ISpireCurveView(CURVE).pair(WETH).fillSeq, fillSeq);
+  }
+
+  /// @dev Spire rejects an unlisted base before transferring the prepaid input.
+  function test_unlistedBasePreservesInput() public {
     deal(USDC, address(adapter), 25e6);
-    vm.expectRevert(SpirePropAdapter.InvalidTokenPair.selector);
-    adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 25e6, USDC, USDC, recipient);
+    vm.expectRevert(bytes4(keccak256('UnknownToken()')));
+    adapter.executeSpireProp(
+      abi.encode(ENTRYPOINT, makeAddr('unlisted base')), 25e6, USDC, WETH, recipient
+    );
     assertEq(USDC.balanceOf(address(adapter)), 25e6);
   }
 
-  /// @dev Short or trailing calldata cannot silently become a different pool/base pair.
-  function test_invalidData() public {
-    vm.expectRevert(SpirePropAdapter.InvalidData.selector);
-    adapter.executeSpireProp(abi.encode(ENTRYPOINT), 25e6, USDC, WETH, recipient);
-    vm.expectRevert(SpirePropAdapter.InvalidData.selector);
-    adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH, uint256(1)), 25e6, USDC, WETH, recipient);
-  }
-
-  /// @dev The integration only supports ERC20 assets; native value remains with the caller on revert.
-  function test_nativeRejected() public {
-    vm.deal(address(this), 1 ether);
-    vm.expectRevert(SpirePropAdapter.NativeNotSupported.selector);
-    adapter.executeSpireProp{value: 1 ether}(
-      abi.encode(ENTRYPOINT, WETH), 1 ether, WETH, USDC, recipient
-    );
-    assertEq(address(this).balance, 1 ether);
-    assertEq(address(adapter).balance, 0);
-  }
-
-  /// @dev Both repository native sentinels are rejected on either side before contract calls.
+  /// @dev Spire rejects both native sentinels as input, so the adapter needs no native check.
   function test_nativeSentinelsRejected() public {
     address[2] memory nativeTokens = [address(0), TokenHelper.NATIVE_ADDRESS];
     for (uint256 i; i < nativeTokens.length; ++i) {
-      vm.expectRevert(SpirePropAdapter.NativeNotSupported.selector);
+      vm.expectRevert(bytes4(keccak256('UnknownToken()')));
       adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 1, nativeTokens[i], USDC, recipient);
-      vm.expectRevert(SpirePropAdapter.NativeNotSupported.selector);
-      adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 1, WETH, nativeTokens[i], recipient);
     }
-  }
-
-  /// @dev A different deployment/base/quote is passed through in atomic units without fixed tokens.
-  function test_otherBaseAndQuote(bool buyBase) public {
-    address entry = makeAddr('other entrypoint');
-    address base = makeAddr('eight decimal base');
-    address quoteToken = makeAddr('other quote token');
-    address tokenIn = buyBase ? quoteToken : base;
-    address tokenOut = buyBase ? base : quoteToken;
-    uint256 amountIn = buyBase ? 25_000_000 : 1_000_000;
-    uint256 expected = buyBase ? 1_000_000 : 25_000_000;
-    vm.mockCall(entry, abi.encodeCall(ISpireEntrypoint.quoteToken, ()), abi.encode(quoteToken));
-    vm.mockCall(
-      tokenIn,
-      abi.encodeWithSignature('approve(address,uint256)', entry, amountIn),
-      abi.encode(true)
-    );
-    bytes memory swap =
-      abi.encodeCall(ISpireEntrypoint.swapExactAmountIn, (base, tokenIn, amountIn, 1, recipient));
-    vm.mockCall(entry, swap, abi.encode(expected));
-    vm.expectCall(entry, swap);
-    vm.expectCall(tokenIn, abi.encodeWithSignature('approve(address,uint256)', entry, amountIn));
-    bytes[] memory balances = new bytes[](2);
-    balances[0] = abi.encode(uint256(7));
-    balances[1] = abi.encode(uint256(7) + expected);
-    vm.mockCalls(tokenOut, abi.encodeWithSignature('balanceOf(address)', recipient), balances);
-    (uint256 unused, uint256 received) =
-      adapter.executeSpireProp(abi.encode(entry, base), amountIn, tokenIn, tokenOut, recipient);
-    assertEq(unused, 0);
-    assertEq(received, expected);
   }
 
   /// @dev Zero input is rejected by the protocol without consuming a fill sequence.

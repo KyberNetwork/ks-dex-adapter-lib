@@ -10,41 +10,25 @@ contract SpirePropAdapter {
   using TokenHelper for address;
   using CalldataDecoder for bytes;
 
-  error InvalidData();
-  error InvalidTokenPair();
-  error NativeNotSupported();
-
-  /// @notice Spends input already transferred to this adapter and pays output directly to recipient.
+  /// @notice Spends input already held by this adapter and pays output directly to recipient.
   /// @dev The enclosing Kyber route enforces its overall minimum output and deadline.
-  ///      Spire independently enforces the authenticated curve expiry and available liquidity.
-  /// @param data ABI encoding of (entrypoint, base), two address words.
+  ///      Spire validates the pair and enforces curve expiry and available liquidity.
+  /// @param data ABI encoding of (entrypoint, base).
   /// @param amountIn Exact input amount already held by this adapter.
-  /// @param tokenIn ERC20 input token, either base or the entrypoint's quote token.
-  /// @param tokenOut The other ERC20 token of the pair.
+  /// @param tokenIn Either the base or the entrypoint's quote token.
   /// @param recipient Address receiving output directly from Spire custody.
-  /// @return amountUnused Always zero on success; Spire consumes the entire input.
-  /// @return amountOut Actual output received by recipient.
+  /// @return amountUnused Always zero; Spire consumes the entire input.
+  /// @return amountOut Output paid to recipient.
   function executeSpireProp(
     bytes calldata data,
     uint256 amountIn,
     address tokenIn,
-    address tokenOut,
+    address,
     address recipient
   ) external payable returns (uint256 amountUnused, uint256 amountOut) {
-    if (data.length != 64) revert InvalidData();
-    if (msg.value != 0 || tokenIn.isNative() || tokenOut.isNative()) revert NativeNotSupported();
     address entrypoint = data.decodeAddress(0);
-    address base = data.decodeAddress(1);
-    address quote = ISpireEntrypoint(entrypoint).quoteToken();
-    if (
-      base == address(0) || base == quote
-        || !((tokenIn == base && tokenOut == quote) || (tokenIn == quote && tokenOut == base))
-    ) revert InvalidTokenPair();
-
     tokenIn.forceApprove(entrypoint, amountIn);
-    uint256 balanceBefore = tokenOut.balanceOf(recipient);
-    ISpireEntrypoint(entrypoint).swapExactAmountIn(base, tokenIn, amountIn, 1, recipient);
-    amountOut = tokenOut.balanceOf(recipient) - balanceBefore;
-    amountUnused = 0;
+    amountOut = ISpireEntrypoint(entrypoint)
+      .swapExactAmountIn(data.decodeAddress(1), tokenIn, amountIn, 1, recipient);
   }
 }
