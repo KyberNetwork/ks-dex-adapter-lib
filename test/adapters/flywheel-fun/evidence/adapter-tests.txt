@@ -1,0 +1,37 @@
+No files changed, compilation skipped
+
+Ran 17 tests for test/adapters/flywheel-fun/FlywheelNativeAdapter.t.sol:FlywheelNativeAdapterTest
+[PASS] testFuzz_nativeBuyKeepsDonations(uint96,uint96) (runs: 128, μ: 180758, ~: 180871)
+[PASS] testFuzz_refundNativeOrWrapped(uint96,bool) (runs: 128, μ: 213098, ~: 293786)
+[PASS] testFuzz_sellNativeOrWrapped(uint96,bool) (runs: 128, μ: 245280, ~: 267079)
+[PASS] test_delegatecallBuyAndSell() (gas: 441092)
+[PASS] test_directETHCallbackRejected() (gas: 33382)
+[PASS] test_erc20InputRejectsUnexpectedETH() (gas: 124748)
+[PASS] test_expiredRejected() (gas: 50007)
+[PASS] test_forwardingETHRecipient() (gas: 384498)
+[PASS] test_impossibleMinimumRollsBack() (gas: 69946)
+[PASS] test_recipientCannotReenterAndSpendResidualTokens() (gas: 1035687)
+[PASS] test_rejectedETHDeliveryRollsBack() (gas: 306250)
+[PASS] test_sellRefundRouteRejected() (gas: 118857)
+[PASS] test_settlementOutputLieRejected() (gas: 167110)
+[PASS] test_wrongChainRejected() (gas: 47764)
+[PASS] test_wrongFactoryRejected() (gas: 792677)
+[PASS] test_wrongPairRejected() (gas: 55214)
+[PASS] test_zeroMinimumRejected() (gas: 49869)
+Suite result: ok. 17 passed; 0 failed; 0 skipped; finished in 12.38ms (44.97ms CPU time)
+2026-10-03T16:54:48.727516Z  WARN cache: non-matching block metadata
+
+Ran 10 tests for test/adapters/flywheel-fun/FlywheelNativeFork.t.sol:FlywheelNativeForkTest
+[PASS] testFork_boomerCurveRoundTrip() (gas: 1525380)
+[PASS] testFork_boomerGraduatedRoundTrip() (gas: 2102180)
+[PASS] testFork_curveGraduationRefund() (gas: 6858294)
+[PASS] testFork_delegatecallGraduationRefundAndSell() (gas: 6996462)
+[PASS] testFork_directCurveRejectedButAdapterWorks() (gas: 1597838)
+[PASS] testFork_directV4SwapRejectedButAdapterWorks() (gas: 2381638)
+[PASS] testFork_invalidExternalRouteReverts() (gas: 177461)
+[PASS] testFork_overfillWithoutRefundReverts() (gas: 5862276)
+[PASS] testFork_wethGraduatedRoundTrip() (gas: 1777916)
+[PASS] testFork_wrappedBoomerRoundTrip() (gas: 2291923)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 5.78s (41.55s CPU time)
+
+Ran 2 test suites in 5.79s (5.79s CPU time): 27 tests passed, 0 failed, 0 skipped (27 total tests)

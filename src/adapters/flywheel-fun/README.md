@@ -34,8 +34,10 @@ forge test --match-path 'test/adapters/flywheel-fun/FlywheelNativeAdapter.t.sol'
 
 Set `FLYWHEEL_READONLY_FORK_URL` to a read-only Robinhood RPC to run `FlywheelNativeFork.t.sol`. The tests only execute transactions in Foundry's local EVM. Fork tests skip explicitly when this variable is missing. No private key is needed.
 
+The companion `kyberswap-dex-lib` contribution includes a portable read-only RPC proxy and runner at `pkg/liquidity-source/flywheel-fun/testdata/runner`. With both contributions checked out as sibling repositories, install that runner's locked npm dependencies and set `FLYWHEEL_RPC_URL` through the environment. Run `node run-forks.cjs adapter` for this suite or `node run-forks.cjs quotes` for the 32 Go quote/execution comparisons. `FLYWHEEL_ADAPTER_LIB_DIR` overrides the sibling checkout path. Upstream writes and signatures are denied; results remain local.
+
 The companion dex-lib draft implements composite quotes and the ABI-encoded Trade payload, with 32 exact local-fork buy/sell comparisons covering WETH, BOOMER and PONS, graduated markets and graduation refunds. This does not validate Kyber's outer execution envelope.
 
-Pending before submission/activation: Kyber's deployed Robinhood executor/router, its refund and delegatecall integration, backend outer calldata integration, routing-engine split routes and shared-pool behavior, measured production gas estimates, and Kyber review/deployment.
+Pending before activation: Kyber's deployed Robinhood executor/router, its refund and delegatecall integration, backend outer calldata integration, routing-engine split routes and shared-pool behavior, measured production gas estimates, and Kyber review/deployment.
 
 Contract ABIs, sources and accounting: https://flywheel.cash/integrations/20260930/index.html
