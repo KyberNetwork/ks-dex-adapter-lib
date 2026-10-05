@@ -18,14 +18,22 @@ contract MentoV3AdapterForkTest is Test {
 
   address recipient = makeAddr('recipient');
 
+  // The executor often holds dust or output from earlier hops, so the adapter never starts empty.
+  uint256 constant DUST_USDC = 123_456; // 0.123456 USDC
+  uint256 constant DUST_USDM = 0.789 ether;
+
   function setUp() public {
-    vm.createSelectFork('monad_mainnet');
+    try vm.createSelectFork('monad_mainnet') {}
+    catch {
+      vm.skip(true, 'Monad fork needs the Monad EVM: run with FOUNDRY_NETWORK=monad');
+    }
     adapter = new MentoV3Adapter();
   }
 
   function test_executeMentoV3_usdcToUsdm() public {
     uint256 amountIn = 1_000_000; // 1 USDC (6 decimals)
-    deal(USDC, address(adapter), amountIn);
+    deal(USDC, address(adapter), amountIn + DUST_USDC);
+    deal(USDm, address(adapter), DUST_USDM);
 
     uint256 expected = IMentoFPMM(POOL).getAmountOut(amountIn, USDC);
     uint256 balanceBefore = IERC20(USDm).balanceOf(recipient);
@@ -37,12 +45,14 @@ contract MentoV3AdapterForkTest is Test {
     assertEq(amountOut, expected);
     assertGt(amountOut, 0);
     assertEq(IERC20(USDm).balanceOf(recipient) - balanceBefore, amountOut);
-    assertEq(IERC20(USDC).balanceOf(address(adapter)), 0);
+    assertEq(IERC20(USDC).balanceOf(address(adapter)), DUST_USDC);
+    assertEq(IERC20(USDm).balanceOf(address(adapter)), DUST_USDM);
   }
 
   function test_executeMentoV3_usdmToUsdc() public {
     uint256 amountIn = 1 ether; // 1 USDm (18 decimals)
-    deal(USDm, address(adapter), amountIn);
+    deal(USDm, address(adapter), amountIn + DUST_USDM);
+    deal(USDC, address(adapter), DUST_USDC);
 
     uint256 expected = IMentoFPMM(POOL).getAmountOut(amountIn, USDm);
     uint256 balanceBefore = IERC20(USDC).balanceOf(recipient);
@@ -54,6 +64,7 @@ contract MentoV3AdapterForkTest is Test {
     assertEq(amountOut, expected);
     assertGt(amountOut, 0);
     assertEq(IERC20(USDC).balanceOf(recipient) - balanceBefore, amountOut);
-    assertEq(IERC20(USDm).balanceOf(address(adapter)), 0);
+    assertEq(IERC20(USDm).balanceOf(address(adapter)), DUST_USDM);
+    assertEq(IERC20(USDC).balanceOf(address(adapter)), DUST_USDC);
   }
 }

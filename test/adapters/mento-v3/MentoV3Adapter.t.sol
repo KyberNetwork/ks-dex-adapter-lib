@@ -89,6 +89,10 @@ contract MentoV3AdapterTest is Test {
 
   address recipient = makeAddr('recipient');
 
+  // The executor often holds dust or output from earlier hops, so the adapter never starts empty.
+  uint256 constant DUST0 = 0.123 ether;
+  uint256 constant DUST1 = 4.567 ether;
+
   function setUp() public {
     adapter = new MentoV3Adapter();
 
@@ -101,6 +105,9 @@ contract MentoV3AdapterTest is Test {
     token0.mint(address(pool), 1_000_000 ether);
     token1.mint(address(pool), 1_000_000 ether);
     pool.sync();
+
+    token0.mint(address(adapter), DUST0);
+    token1.mint(address(adapter), DUST1);
   }
 
   function test_executeMentoV3_zeroForOne() public {
@@ -116,7 +123,9 @@ contract MentoV3AdapterTest is Test {
     assertEq(amountOut, expected);
     assertEq(amountOut, 9.994_355_422_45 ether);
     assertEq(token1.balanceOf(recipient), amountOut);
-    assertEq(token0.balanceOf(address(adapter)), 0);
+    // only amountIn left the adapter; pre-existing balances of both tokens are untouched
+    assertEq(token0.balanceOf(address(adapter)), DUST0);
+    assertEq(token1.balanceOf(address(adapter)), DUST1);
     assertEq(pool.lastAmount0Out(), 0);
     assertEq(pool.lastAmount1Out(), amountOut);
     assertEq(pool.lastTo(), recipient);
@@ -134,15 +143,19 @@ contract MentoV3AdapterTest is Test {
     assertEq(amountUnused, 0);
     assertEq(amountOut, expected);
     assertEq(token0.balanceOf(recipient), amountOut);
-    assertEq(token1.balanceOf(address(adapter)), 0);
+    assertEq(token0.balanceOf(address(adapter)), DUST0);
+    assertEq(token1.balanceOf(address(adapter)), DUST1);
     assertEq(pool.lastAmount0Out(), amountOut);
     assertEq(pool.lastAmount1Out(), 0);
+    assertEq(pool.lastTo(), recipient);
   }
 
   function testFuzz_executeMentoV3(uint256 amountIn, bool zeroForOne) public {
     amountIn = bound(amountIn, 1, 100_000 ether);
     (MentoV3TestToken tokenIn, MentoV3TestToken tokenOut) =
       zeroForOne ? (token0, token1) : (token1, token0);
+    uint256 adapterInBefore = tokenIn.balanceOf(address(adapter));
+    uint256 adapterOutBefore = tokenOut.balanceOf(address(adapter));
     tokenIn.mint(address(adapter), amountIn);
 
     (uint256 amountUnused, uint256 amountOut) = adapter.executeMentoV3(
@@ -152,6 +165,7 @@ contract MentoV3AdapterTest is Test {
     assertEq(amountUnused, 0);
     assertEq(amountOut, pool.getAmountOut(amountIn, address(tokenIn)));
     assertEq(tokenOut.balanceOf(recipient), amountOut);
-    assertEq(tokenIn.balanceOf(address(adapter)), 0);
+    assertEq(tokenIn.balanceOf(address(adapter)), adapterInBefore);
+    assertEq(tokenOut.balanceOf(address(adapter)), adapterOutBefore);
   }
 }
