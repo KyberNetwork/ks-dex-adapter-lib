@@ -21,10 +21,10 @@ contract EverlongFlammAdapterTest is Test {
   address constant POOL = 0xc0fdCB1799cCc2CEBaA1fe247157b0dF33D57572;
   address constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf; // pool asset
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913; // loan asset 0
-  address constant WETH = 0x4200000000000000000000000000000000000006;
 
-  uint256 constant VENUE_SWAP = 0;
-  uint256 constant VENUE_LEVERAGE = 1;
+  uint256 constant KIND_SWAP = 0;
+  uint256 constant KIND_LEVER_UP = 1;
+  uint256 constant KIND_LEVER_DOWN = 2;
 
   /// @dev The pool's only settled Swap: sell 15_000 sats -> 11_301_759 USDC, tx
   /// 0x46c3cd72a5860b2fe546e5a2130e066314e3777027151661e1e4f19a935901fa at index 97 of block
@@ -67,8 +67,8 @@ contract EverlongFlammAdapterTest is Test {
   function setUp() public {
     _forkBase(PINNED_BLOCK);
     adapter = new EverlongFlammAdapter();
-    (sellMin, sellMax) = _quotableRange(VENUE_SWAP, true);
-    (buyMin, buyMax) = _quotableRange(VENUE_SWAP, false);
+    (sellMin, sellMax) = _quotableRange(false, true);
+    (buyMin, buyMax) = _quotableRange(false, false);
   }
 
   // ------------------------------------------------------------------ swap venue
@@ -80,25 +80,24 @@ contract EverlongFlammAdapterTest is Test {
     uint256 recipientBefore = USDC.balanceOf(recipient);
 
     (uint256 amountUnused, uint256 amountOut) = replay.executeEverlongFlamm(
-      abi.encode(POOL, VENUE_SWAP), SETTLED_SELL_IN, CBBTC, USDC, recipient
+      abi.encode(POOL, KIND_SWAP), SETTLED_SELL_IN, CBBTC, USDC, recipient
     );
 
     assertEq(amountOut, SETTLED_SELL_OUT, 'adapter must reproduce the settled amountOut');
     assertEq(amountUnused, 0, 'settled input must be fully consumed');
     assertEq(USDC.balanceOf(recipient) - recipientBefore, SETTLED_SELL_OUT, 'paid to recipient');
     assertEq(CBBTC.balanceOf(address(replay)), 0, 'input fully spent');
-    assertEq(IERC20(CBBTC).allowance(address(replay), POOL), 0, 'no standing allowance');
   }
 
   /// @dev The production shape: the executor DELEGATECALLs the adapter with the route's
   /// `msg.value` still on the frame (an ETH-input route whose FLAMM hop is ERC-20) and passes
   /// itself as recipient. Both directions must settle exactly as previewSwap, with the output,
-  /// the unused input and the value all on the executor and no allowance left behind.
+  /// the unused input and the value all on the executor.
   function test_delegatecall_nativeRouteHop() public {
     DelegatecallExecutor executor = new DelegatecallExecutor();
     uint256 routeValue = 0.25 ether;
     vm.deal(address(this), 2 * routeValue);
-    bytes memory data = abi.encode(POOL, VENUE_SWAP);
+    bytes memory data = abi.encode(POOL, KIND_SWAP);
 
     for (uint256 i; i < 2; i++) {
       bool sell = i == 0;
@@ -118,7 +117,6 @@ contract EverlongFlammAdapterTest is Test {
       assertGt(amountOut, 0);
       assertEq(tokenIn.balanceOf(address(executor)), amountUnused, 'unused input on the executor');
       assertEq(tokenOut.balanceOf(address(executor)) - outBefore, amountOut, 'paid to executor');
-      assertEq(IERC20(tokenIn).allowance(address(executor), POOL), 0, 'no standing allowance');
       assertEq(address(executor).balance - valueBefore, routeValue, 'value untouched');
     }
   }
@@ -136,14 +134,14 @@ contract EverlongFlammAdapterTest is Test {
     try IFLAMMTestHooks(POOL).previewSwap(sell, amountIn) returns (
       uint256 used, uint256 out, uint256
     ) {
-      (uint256 amountUnused, uint256 amountOut) = _execute(VENUE_SWAP, amountIn, tokenIn, tokenOut);
+      (uint256 amountUnused, uint256 amountOut) = _execute(KIND_SWAP, amountIn, tokenIn, tokenOut);
       assertEq(amountIn - amountUnused, used, 'used must match previewSwap');
       assertEq(amountOut, out, 'out must match previewSwap');
     } catch (bytes memory reason) {
       deal(tokenIn, address(adapter), amountIn);
       vm.expectRevert(reason);
       adapter.executeEverlongFlamm(
-        abi.encode(POOL, VENUE_SWAP), amountIn, tokenIn, tokenOut, recipient
+        abi.encode(POOL, KIND_SWAP), amountIn, tokenIn, tokenOut, recipient
       );
     }
   }
@@ -160,7 +158,7 @@ contract EverlongFlammAdapterTest is Test {
       assertTrue(amountIn < buyMin || amountIn > buyMax, 'size must be outside the bracket');
 
       (uint256 used, uint256 out,) = IFLAMMTestHooks(POOL).previewSwap(false, amountIn);
-      (uint256 amountUnused, uint256 amountOut) = _execute(VENUE_SWAP, amountIn, USDC, CBBTC);
+      (uint256 amountUnused, uint256 amountOut) = _execute(KIND_SWAP, amountIn, USDC, CBBTC);
 
       assertEq(amountIn - amountUnused, used, 'used must match previewSwap');
       assertEq(amountOut, out, 'out must match previewSwap');
@@ -179,7 +177,7 @@ contract EverlongFlammAdapterTest is Test {
 
     (uint256 used, uint256 out,) = IFLAMMTestHooks(POOL).previewSwap(true, amountIn);
     assertLt(used, amountIn, 'the cap must clip this sell for the test to mean anything');
-    (uint256 amountUnused, uint256 amountOut) = _execute(VENUE_SWAP, amountIn, CBBTC, USDC);
+    (uint256 amountUnused, uint256 amountOut) = _execute(KIND_SWAP, amountIn, CBBTC, USDC);
 
     assertGt(amountUnused, 0, 'clipped sell must partially fill');
     assertEq(amountIn - amountUnused, used, 'used must match previewSwap');
@@ -196,44 +194,19 @@ contract EverlongFlammAdapterTest is Test {
     deal(USDC, address(adapter), amountIn);
 
     vm.expectRevert(IFLAMMTestHooks.NotionalCap.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, VENUE_SWAP), amountIn, USDC, CBBTC, recipient);
+    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_SWAP), amountIn, USDC, CBBTC, recipient);
   }
 
   function test_sell_priceBand_reverts() public {
     deal(CBBTC, address(adapter), sellMax + 1);
     vm.expectRevert(IFLAMMTestHooks.PriceBand.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, VENUE_SWAP), sellMax + 1, CBBTC, USDC, recipient);
+    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_SWAP), sellMax + 1, CBBTC, USDC, recipient);
   }
 
   function test_buy_priceBand_reverts() public {
     deal(USDC, address(adapter), buyMax + 1);
     vm.expectRevert(IFLAMMTestHooks.PriceBand.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, VENUE_SWAP), buyMax + 1, USDC, CBBTC, recipient);
-  }
-
-  /// @dev The pair is bound to the pool's own getters in both venues: a token the pool does
-  /// not trade, or the same token on both legs, is refused by name.
-  function test_tokenMismatch() public {
-    deal(CBBTC, address(adapter), 1000);
-    deal(USDC, address(adapter), 1e6);
-    for (uint256 venue; venue <= VENUE_LEVERAGE; venue++) {
-      bytes memory data = abi.encode(POOL, venue);
-      vm.expectRevert(EverlongFlammAdapter.EverlongFlammAdapter_TokenMismatch.selector);
-      adapter.executeEverlongFlamm(data, 1000, CBBTC, WETH, recipient);
-      vm.expectRevert(EverlongFlammAdapter.EverlongFlammAdapter_TokenMismatch.selector);
-      adapter.executeEverlongFlamm(data, 1e6, WETH, USDC, recipient);
-      vm.expectRevert(EverlongFlammAdapter.EverlongFlammAdapter_TokenMismatch.selector);
-      adapter.executeEverlongFlamm(data, 1000, CBBTC, CBBTC, recipient);
-      vm.expectRevert(EverlongFlammAdapter.EverlongFlammAdapter_TokenMismatch.selector);
-      adapter.executeEverlongFlamm(data, 1e6, USDC, USDC, recipient);
-    }
-  }
-
-  function test_unknownVenue(uint256 venue) public {
-    venue = bound(venue, VENUE_LEVERAGE + 1, type(uint256).max);
-    deal(CBBTC, address(adapter), 1000);
-    vm.expectRevert(EverlongFlammAdapter.EverlongFlammAdapter_UnknownVenue.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, venue), 1000, CBBTC, USDC, recipient);
+    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_SWAP), buyMax + 1, USDC, CBBTC, recipient);
   }
 
   // ------------------------------------------------------------------ leverage venue
@@ -245,9 +218,9 @@ contract EverlongFlammAdapterTest is Test {
     deal(USDC, address(adapter), 1e6);
 
     vm.expectRevert(IFLAMMTestHooks.LevPaused.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, VENUE_LEVERAGE), 1000, CBBTC, USDC, recipient);
+    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_LEVER_UP), 1000, CBBTC, USDC, recipient);
     vm.expectRevert(IFLAMMTestHooks.LevPaused.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, VENUE_LEVERAGE), 1e6, USDC, CBBTC, recipient);
+    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_LEVER_DOWN), 1e6, USDC, CBBTC, recipient);
   }
 
   /// @dev Unpaused with the keeper's post past `maxSpreadAge`: a lever-up fails closed.
@@ -258,7 +231,7 @@ contract EverlongFlammAdapterTest is Test {
     deal(CBBTC, address(adapter), 1000);
 
     vm.expectRevert(IFLAMMTestHooks.SpreadUnavailable.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, VENUE_LEVERAGE), 1000, CBBTC, USDC, recipient);
+    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_LEVER_UP), 1000, CBBTC, USDC, recipient);
   }
 
   /// @dev leverUp is all or nothing: the fill equals previewLever and consumes the input.
@@ -268,7 +241,7 @@ contract EverlongFlammAdapterTest is Test {
 
     (uint256 used, uint256 out,,) = IFLAMMTestHooks(POOL).previewLever(true, amountIn);
     assertEq(used, amountIn);
-    (uint256 amountUnused, uint256 amountOut) = _execute(VENUE_LEVERAGE, amountIn, CBBTC, USDC);
+    (uint256 amountUnused, uint256 amountOut) = _execute(KIND_LEVER_UP, amountIn, CBBTC, USDC);
 
     assertEq(amountUnused, 0, 'lever-up consumes the whole input');
     assertEq(amountOut, out, 'out must match previewLever');
@@ -283,7 +256,7 @@ contract EverlongFlammAdapterTest is Test {
     uint256 amountIn = 10e6;
 
     (uint256 payNative, uint256 out,,) = IFLAMMTestHooks(POOL).previewLever(false, amountIn);
-    (uint256 amountUnused, uint256 amountOut) = _execute(VENUE_LEVERAGE, amountIn, USDC, CBBTC);
+    (uint256 amountUnused, uint256 amountOut) = _execute(KIND_LEVER_DOWN, amountIn, USDC, CBBTC);
 
     assertEq(amountIn - amountUnused, payNative, 'used must be previewLever payNative');
     assertGt(amountUnused, 0, 'the virtual leg leaves input unpulled');
@@ -301,22 +274,20 @@ contract EverlongFlammAdapterTest is Test {
     _armLeverage();
     bool up = amountIn % 2 == 0;
     (address tokenIn, address tokenOut) = up ? (CBBTC, USDC) : (USDC, CBBTC);
-    (uint256 lo, uint256 hi) = _quotableRange(VENUE_LEVERAGE, up);
+    uint256 kind = up ? KIND_LEVER_UP : KIND_LEVER_DOWN;
+    (uint256 lo, uint256 hi) = _quotableRange(true, up);
     amountIn = bound(amountIn, lo > 1 ? lo - 1 : lo, hi + 1);
 
     try IFLAMMTestHooks(POOL).previewLever(up, amountIn) returns (
       uint256 used, uint256 out, uint256, uint256
     ) {
-      (uint256 amountUnused, uint256 amountOut) =
-        _execute(VENUE_LEVERAGE, amountIn, tokenIn, tokenOut);
+      (uint256 amountUnused, uint256 amountOut) = _execute(kind, amountIn, tokenIn, tokenOut);
       assertEq(amountIn - amountUnused, used, 'used must match previewLever');
       assertEq(amountOut, out, 'out must match previewLever');
     } catch (bytes memory reason) {
       deal(tokenIn, address(adapter), amountIn);
       vm.expectRevert(reason);
-      adapter.executeEverlongFlamm(
-        abi.encode(POOL, VENUE_LEVERAGE), amountIn, tokenIn, tokenOut, recipient
-      );
+      adapter.executeEverlongFlamm(abi.encode(POOL, kind), amountIn, tokenIn, tokenOut, recipient);
     }
   }
 
@@ -334,14 +305,16 @@ contract EverlongFlammAdapterTest is Test {
       assertEq(bytes4(reason), IFLAMMTestHooks.PriceBand.selector);
     }
     vm.expectRevert(IFLAMMTestHooks.PriceBand.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, VENUE_LEVERAGE), amountIn, USDC, CBBTC, recipient);
+    adapter.executeEverlongFlamm(
+      abi.encode(POOL, KIND_LEVER_DOWN), amountIn, USDC, CBBTC, recipient
+    );
   }
 
   // ------------------------------------------------------------------ helpers
 
   /// @dev Deal `amountIn`, execute, and close the accounting on balances: unused input stays
-  /// in the adapter, output lands on the recipient, and no allowance outlives the call.
-  function _execute(uint256 venue, uint256 amountIn, address tokenIn, address tokenOut)
+  /// in the adapter, output lands on the recipient.
+  function _execute(uint256 kind, uint256 amountIn, address tokenIn, address tokenOut)
     internal
     returns (uint256 amountUnused, uint256 amountOut)
   {
@@ -349,18 +322,17 @@ contract EverlongFlammAdapterTest is Test {
     uint256 recipientBefore = tokenOut.balanceOf(recipient);
 
     (amountUnused, amountOut) =
-      adapter.executeEverlongFlamm(abi.encode(POOL, venue), amountIn, tokenIn, tokenOut, recipient);
+      adapter.executeEverlongFlamm(abi.encode(POOL, kind), amountIn, tokenIn, tokenOut, recipient);
 
     assertGt(amountOut, 0);
     assertEq(tokenIn.balanceOf(address(adapter)), amountUnused, 'unused input stays in adapter');
     assertEq(tokenOut.balanceOf(recipient) - recipientBefore, amountOut, 'paid to recipient');
-    assertEq(IERC20(tokenIn).allowance(address(adapter), POOL), 0, 'no standing allowance');
   }
 
   /// @dev Whether the venue's own preview quotes `amountIn`; `sell` is pool asset in (for the
   /// leverage venue, leverUp).
-  function _quotes(uint256 venue, bool sell, uint256 amountIn) internal view returns (bool) {
-    if (venue == VENUE_SWAP) {
+  function _quotes(bool lever, bool sell, uint256 amountIn) internal view returns (bool) {
+    if (!lever) {
       try IFLAMMTestHooks(POOL).previewSwap(sell, amountIn) returns (uint256, uint256, uint256) {
         return true;
       } catch {
@@ -386,9 +358,9 @@ contract EverlongFlammAdapterTest is Test {
   /// test_buy_outsideBracket. Inside the bracket the set is not an interval either: dust and
   /// band-edge sizes alternate between quoting and refusing on the 1 sat / 1 micro-USDC output
   /// grid, which is why every caller checks the preview for the size it is about to run.
-  function _quotableRange(uint256 venue, bool sell) internal view returns (uint256 lo, uint256 hi) {
+  function _quotableRange(bool lever, bool sell) internal view returns (uint256 lo, uint256 hi) {
     uint256 seed = 1;
-    while (!_quotes(venue, sell, seed)) {
+    while (!_quotes(lever, sell, seed)) {
       seed <<= 1;
       require(seed < 1 << 64, 'no quotable size');
     }
@@ -396,19 +368,19 @@ contract EverlongFlammAdapterTest is Test {
     lo = seed;
     while (lo - bad > 1) {
       uint256 mid = (lo + bad) >> 1;
-      if (_quotes(venue, sell, mid)) lo = mid;
+      if (_quotes(lever, sell, mid)) lo = mid;
       else bad = mid;
     }
     hi = seed;
     bad = seed << 1;
-    while (_quotes(venue, sell, bad)) {
+    while (_quotes(lever, sell, bad)) {
       hi = bad;
       bad <<= 1;
       require(bad < 1 << 64, 'unbounded quotable size');
     }
     while (bad - hi > 1) {
       uint256 mid = (hi + bad) >> 1;
-      if (_quotes(venue, sell, mid)) hi = mid;
+      if (_quotes(lever, sell, mid)) hi = mid;
       else bad = mid;
     }
   }
