@@ -22,6 +22,7 @@ env:
   RPC_2020: ${{ secrets.RPC_2020 }}
   RPC_5000: ${{ secrets.RPC_5000 }}
   RPC_143: ${{ secrets.RPC_143 }}
+  RPC_999: ${{ secrets.RPC_999 }}
 
 jobs:
   check:
