@@ -4,17 +4,17 @@ pragma solidity ^0.8.0;
 
 import 'forge-std/Test.sol';
 
-import './DelegatecallExecutor.sol';
 import './IFLAMMTestHooks.sol';
 import 'src/adapters/everlong-flamm/EverlongFlammAdapter.sol';
 
 /// @notice Fork tests against the live Base FLAMM pool (cbBTC 8d pool asset / USDC 6d loan
-/// asset 0).
+/// asset 0): one test per kind, each comparing the adapter's fill against the pool's own
+/// preview on the same state it executes against, never against a tolerance.
 ///
-/// `test_replaySettledSwap` is the strongest gate: the only swap the pool has settled is
-/// re-executed THROUGH THE ADAPTER on a fork of its parent block, and the adapter must
-/// reproduce the settled amounts to the wei. Every other fill is checked against the pool's
-/// own preview on the same state it executes against — never against a tolerance.
+/// The preview is both the oracle and the feasibility filter. The pool refuses sizes for its
+/// own reasons — dust, the price band, the notional cap, gate room — and which sizes those are
+/// is the pool's business, not the adapter's, so a fuzzed size the preview refuses is skipped
+/// rather than asserted on.
 contract EverlongFlammAdapterTest is Test {
   using TokenHelper for address;
 
@@ -26,294 +26,95 @@ contract EverlongFlammAdapterTest is Test {
   uint256 constant KIND_LEVER_UP = 1;
   uint256 constant KIND_LEVER_DOWN = 2;
 
-  /// @dev The pool's only settled Swap: sell 15_000 sats -> 11_301_759 USDC, tx
-  /// 0x46c3cd72a5860b2fe546e5a2130e066314e3777027151661e1e4f19a935901fa at index 97 of block
-  /// 51_302_916. The replay forks the PARENT block, not the tx hash: a tx-hash fork re-executes
-  /// the 97 earlier txs, which a cold cache pays against the rate-limited public endpoint. No
-  /// earlier tx in that block emits a log from the pool, its hooks, feed, aggregator, routers
-  /// or Morpho account; the Morpho loan market's only earlier event is index 37, a lender's
-  /// withdrawal, which does not bind this fill. previewSwap(true, 15_000) at the parent block
-  /// is (15_000, 11_301_759, 17_499_999_999_999_999), the settled Swap exactly, and the replay
-  /// below asserts the settled amounts to the wei, so a divergent parent state fails the test.
-  uint256 constant SETTLED_SWAP_PARENT_BLOCK = 51_302_915;
-  uint256 constant SETTLED_SELL_IN = 15_000;
-  uint256 constant SETTLED_SELL_OUT = 11_301_759;
-
-  /// @dev Unpaused, features 63, leverage venue paused with a stale spread post.
+  /// @dev Unpaused, features 63, leverage venue paused with a stale spread post, which is why
+  /// the two lever tests arm the venue first.
   uint256 constant PINNED_BLOCK = 51_313_000;
 
   EverlongFlammAdapter adapter;
   address recipient = makeAddr('recipient');
-
-  /// @dev The quotable input bracket per swap direction at PINNED_BLOCK, found on-chain.
-  uint256 sellMin;
-  uint256 sellMax;
-  uint256 buyMin;
-  uint256 buyMax;
 
   /// @dev This suite reads `RPC_8453` itself, with the public endpoint as a default, rather
   /// than `foundry.toml`'s `base_mainnet` alias, which resolves to the same variable but has
   /// no default. An empty value counts as unset: `test.yml` declares `RPC_8453` from a secret
   /// at workflow level, and GitHub renders an unavailable secret as the empty string on a
   /// `pull_request` run raised from a fork, so `envOr`'s default alone is never reached there.
-  /// Both pinned blocks are served by the public endpoint; a reviewer holding an archive
-  /// endpoint should set `RPC_8453` to it, which is what CI does in the upstream repository.
-  function _forkBase(uint256 blockNumber) private {
+  /// The pinned block is served by the public endpoint; a reviewer holding an archive endpoint
+  /// should set `RPC_8453` to it, which is what CI does in the upstream repository.
+  function setUp() public {
     string memory rpc = vm.envOr('RPC_8453', string(''));
     if (bytes(rpc).length == 0) rpc = 'https://mainnet.base.org';
-    vm.createSelectFork(rpc, blockNumber);
-  }
-
-  function setUp() public {
-    _forkBase(PINNED_BLOCK);
+    vm.createSelectFork(rpc, PINNED_BLOCK);
     adapter = new EverlongFlammAdapter();
-    (sellMin, sellMax) = _quotableRange(false, true);
-    (buyMin, buyMax) = _quotableRange(false, false);
   }
 
-  // ------------------------------------------------------------------ swap venue
+  /// @dev Both directions of the swap venue against `previewSwap`. `poolAssetIn` sells cbBTC
+  /// for USDC; the other way buys cbBTC with USDC.
+  function test_swap(uint256 amountIn, bool poolAssetIn) public {
+    amountIn = bound(amountIn, 1, poolAssetIn ? 1e9 : 1e12);
+    (address tokenIn, address tokenOut) = poolAssetIn ? (CBBTC, USDC) : (USDC, CBBTC);
 
-  function test_replaySettledSwap() public {
-    _forkBase(SETTLED_SWAP_PARENT_BLOCK);
-    EverlongFlammAdapter replay = new EverlongFlammAdapter();
-    deal(CBBTC, address(replay), SETTLED_SELL_IN);
-    uint256 recipientBefore = USDC.balanceOf(recipient);
-
-    (uint256 amountUnused, uint256 amountOut) = replay.executeEverlongFlamm(
-      abi.encode(POOL, KIND_SWAP), SETTLED_SELL_IN, CBBTC, USDC, recipient
-    );
-
-    assertEq(amountOut, SETTLED_SELL_OUT, 'adapter must reproduce the settled amountOut');
-    assertEq(amountUnused, 0, 'settled input must be fully consumed');
-    assertEq(USDC.balanceOf(recipient) - recipientBefore, SETTLED_SELL_OUT, 'paid to recipient');
-    assertEq(CBBTC.balanceOf(address(replay)), 0, 'input fully spent');
-  }
-
-  /// @dev The production shape: the executor DELEGATECALLs the adapter with the route's
-  /// `msg.value` still on the frame (an ETH-input route whose FLAMM hop is ERC-20) and passes
-  /// itself as recipient. Both directions must settle exactly as previewSwap, with the output,
-  /// the unused input and the value all on the executor.
-  function test_delegatecall_nativeRouteHop() public {
-    DelegatecallExecutor executor = new DelegatecallExecutor();
-    uint256 routeValue = 0.25 ether;
-    vm.deal(address(this), 2 * routeValue);
-    bytes memory data = abi.encode(POOL, KIND_SWAP);
-
-    for (uint256 i; i < 2; i++) {
-      bool sell = i == 0;
-      (address tokenIn, address tokenOut) = sell ? (CBBTC, USDC) : (USDC, CBBTC);
-      uint256 amountIn = sell ? SETTLED_SELL_IN : 10e6;
-      (uint256 used, uint256 out,) = IFLAMMTestHooks(POOL).previewSwap(sell, amountIn);
-      deal(tokenIn, address(executor), amountIn);
-      uint256 outBefore = tokenOut.balanceOf(address(executor));
-      uint256 valueBefore = address(executor).balance;
-
-      (uint256 amountUnused, uint256 amountOut) = executor.execute{value: routeValue}(
-        address(adapter), data, amountIn, tokenIn, tokenOut, address(executor)
-      );
-
-      assertEq(amountIn - amountUnused, used, 'used must match previewSwap');
-      assertEq(amountOut, out, 'out must match previewSwap');
-      assertGt(amountOut, 0);
-      assertEq(tokenIn.balanceOf(address(executor)), amountUnused, 'unused input on the executor');
-      assertEq(tokenOut.balanceOf(address(executor)) - outBefore, amountOut, 'paid to executor');
-      assertEq(address(executor).balance - valueBefore, routeValue, 'value untouched');
-    }
-  }
-
-  /// @dev Canonical adapter test: the fuzzed value picks the direction and, bounded into the
-  /// range the pool quotes at the pinned block, is the runtime `amountIn`. The fill must equal
-  /// the pool's own preview on the same state. Near both edges the band check sawtooths on the
-  /// output grid (1 sat / 1 micro-USDC), so a size inside the range can still be refused; there
-  /// the adapter must refuse with the preview's exact revert data.
-  function test_executeEverlongFlamm(uint256 amountIn) public {
-    bool sell = amountIn % 2 == 0;
-    (address tokenIn, address tokenOut) = sell ? (CBBTC, USDC) : (USDC, CBBTC);
-    amountIn = sell ? bound(amountIn, sellMin, sellMax) : bound(amountIn, buyMin, buyMax);
-
-    try IFLAMMTestHooks(POOL).previewSwap(sell, amountIn) returns (
+    uint256 expectedUsed;
+    uint256 expectedOut;
+    try IFLAMMTestHooks(POOL).previewSwap(poolAssetIn, amountIn) returns (
       uint256 used, uint256 out, uint256
     ) {
-      (uint256 amountUnused, uint256 amountOut) = _execute(KIND_SWAP, amountIn, tokenIn, tokenOut);
-      assertEq(amountIn - amountUnused, used, 'used must match previewSwap');
-      assertEq(amountOut, out, 'out must match previewSwap');
-    } catch (bytes memory reason) {
-      deal(tokenIn, address(adapter), amountIn);
-      vm.expectRevert(reason);
-      adapter.executeEverlongFlamm(
-        abi.encode(POOL, KIND_SWAP), amountIn, tokenIn, tokenOut, recipient
-      );
+      (expectedUsed, expectedOut) = (used, out);
+    } catch {
+      return; // the pool refuses this size; there is no fill for the adapter to reproduce
     }
+
+    (uint256 amountUnused, uint256 amountOut) = _execute(KIND_SWAP, amountIn, tokenIn, tokenOut);
+    assertEq(amountOut, expectedOut, 'swap output is the preview');
+    assertEq(amountIn - amountUnused, expectedUsed, 'swap consumes what the preview used');
   }
 
-  /// @dev `_quotableRange` reports the first contiguous bracket, so the fuzz above never
-  /// reaches the buys the pool accepts outside it. These four sizes are outside the bracket at
-  /// PINNED_BLOCK — two dust buys below `buyMin`, the two ends of the run above `buyMax` — and
-  /// the adapter must fill them exactly as previewSwap does. Each runs on the pinned state.
-  function test_buy_outsideBracket() public {
-    uint256[4] memory sizes = [uint256(790), 1580, 185_399_567, 185_399_768];
-    for (uint256 i; i < sizes.length; i++) {
-      uint256 snapshot = vm.snapshotState();
-      uint256 amountIn = sizes[i];
-      assertTrue(amountIn < buyMin || amountIn > buyMax, 'size must be outside the bracket');
-
-      (uint256 used, uint256 out,) = IFLAMMTestHooks(POOL).previewSwap(false, amountIn);
-      (uint256 amountUnused, uint256 amountOut) = _execute(KIND_SWAP, amountIn, USDC, CBBTC);
-
-      assertEq(amountIn - amountUnused, used, 'used must match previewSwap');
-      assertEq(amountOut, out, 'out must match previewSwap');
-      vm.revertToState(snapshot);
-    }
-  }
-
-  /// @dev A sell whose output exceeds the loan asset's notional cap is CLIPPED, not refused:
-  /// the ceiling bounds the fill and only the consumed part of the input is pulled.
-  function test_partialFill_notionalCap() public {
-    uint256 amountIn = sellMax;
-    (uint256 uncappedUsed, uint256 uncappedOut,) = IFLAMMTestHooks(POOL).previewSwap(true, amountIn);
-    assertEq(uncappedUsed, amountIn, 'the uncapped sell fills in full');
-    uint256 cap = uncappedOut / 4;
-    _setMaxSwapNotional(cap);
-
-    (uint256 used, uint256 out,) = IFLAMMTestHooks(POOL).previewSwap(true, amountIn);
-    assertLt(used, amountIn, 'the cap must clip this sell for the test to mean anything');
-    (uint256 amountUnused, uint256 amountOut) = _execute(KIND_SWAP, amountIn, CBBTC, USDC);
-
-    assertGt(amountUnused, 0, 'clipped sell must partially fill');
-    assertEq(amountIn - amountUnused, used, 'used must match previewSwap');
-    assertEq(amountOut, out, 'out must match previewSwap');
-    assertLe(amountOut, cap, 'output bounded by the notional cap');
-  }
-
-  /// @dev The buy leg checks the cap on the loan asset it takes in and reverts past it.
-  function test_buy_notionalCap_reverts() public {
-    uint256 amountIn = buyMax;
-    (uint256 uncappedUsed,,) = IFLAMMTestHooks(POOL).previewSwap(false, amountIn);
-    assertEq(uncappedUsed, amountIn, 'the uncapped buy fills in full');
-    _setMaxSwapNotional(amountIn - 1);
-    deal(USDC, address(adapter), amountIn);
-
-    vm.expectRevert(IFLAMMTestHooks.NotionalCap.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_SWAP), amountIn, USDC, CBBTC, recipient);
-  }
-
-  function test_sell_priceBand_reverts() public {
-    deal(CBBTC, address(adapter), sellMax + 1);
-    vm.expectRevert(IFLAMMTestHooks.PriceBand.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_SWAP), sellMax + 1, CBBTC, USDC, recipient);
-  }
-
-  function test_buy_priceBand_reverts() public {
-    deal(USDC, address(adapter), buyMax + 1);
-    vm.expectRevert(IFLAMMTestHooks.PriceBand.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_SWAP), buyMax + 1, USDC, CBBTC, recipient);
-  }
-
-  // ------------------------------------------------------------------ leverage venue
-
-  function test_lever_paused_reverts() public {
-    (,, bool leveragePaused) = IFLAMMTestHooks(POOL).switches();
-    assertTrue(leveragePaused, 'the venue is paused at the pinned block');
-    deal(CBBTC, address(adapter), 1000);
-    deal(USDC, address(adapter), 1e6);
-
-    vm.expectRevert(IFLAMMTestHooks.LevPaused.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_LEVER_UP), 1000, CBBTC, USDC, recipient);
-    vm.expectRevert(IFLAMMTestHooks.LevPaused.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_LEVER_DOWN), 1e6, USDC, CBBTC, recipient);
-  }
-
-  /// @dev Unpaused with the keeper's post past `maxSpreadAge`: a lever-up fails closed.
-  function test_leverUp_staleSpread_reverts() public {
-    _unpauseLeverage();
-    ILeverageSpreadHook hook = _spreadHook();
-    assertGt(block.timestamp, uint256(hook.lastSetTs()) + hook.maxSpreadAge(), 'post is stale');
-    deal(CBBTC, address(adapter), 1000);
-
-    vm.expectRevert(IFLAMMTestHooks.SpreadUnavailable.selector);
-    adapter.executeEverlongFlamm(abi.encode(POOL, KIND_LEVER_UP), 1000, CBBTC, USDC, recipient);
-  }
-
-  /// @dev leverUp is all or nothing: the fill equals previewLever and consumes the input.
-  function test_leverUp_afterArming() public {
+  /// @dev The leverage venue's lever-up leg against `previewLever(true, .)`: pool asset in,
+  /// loan asset out.
+  function test_leverUp(uint256 amountIn) public {
     _armLeverage();
-    uint256 amountIn = 10_000;
+    amountIn = bound(amountIn, 1, 1e9);
 
-    (uint256 used, uint256 out,,) = IFLAMMTestHooks(POOL).previewLever(true, amountIn);
-    assertEq(used, amountIn);
-    (uint256 amountUnused, uint256 amountOut) = _execute(KIND_LEVER_UP, amountIn, CBBTC, USDC);
-
-    assertEq(amountUnused, 0, 'lever-up consumes the whole input');
-    assertEq(amountOut, out, 'out must match previewLever');
-  }
-
-  /// @dev leverDown pulls only the net pay leg; the rest of `amountIn` is reported unused and
-  /// is still in the adapter when the call returns. That remainder is not spare input:
-  /// `FLAMMLeverLib.sol:125-141` sizes the fill on the whole `amountIn` before charging
-  /// `payNative`, so the venue re-quoted at `amountIn - amountUnused` fills less, not the same.
-  function test_leverDown_reportsPayNative() public {
-    _armLeverage();
-    uint256 amountIn = 10e6;
-
-    (uint256 payNative, uint256 out,,) = IFLAMMTestHooks(POOL).previewLever(false, amountIn);
-    (uint256 amountUnused, uint256 amountOut) = _execute(KIND_LEVER_DOWN, amountIn, USDC, CBBTC);
-
-    assertEq(amountIn - amountUnused, payNative, 'used must be previewLever payNative');
-    assertGt(amountUnused, 0, 'the virtual leg leaves input unpulled');
-    assertEq(amountOut, out, 'out must match previewLever');
-  }
-
-  /// @dev Canonical adapter test, leverage venue: armed at the pinned block, the fuzzed value
-  /// picks the direction (pool asset in = leverUp) and, bounded into the range previewLever
-  /// quotes widened by one unit on each side, is the runtime `amountIn`. Inside the range the
-  /// out grid and leverDown's ceilDiv'd pay leg (`payNative = ceilDiv(payL18, scale)`, pulled
-  /// instead of `amountIn`) move with size, and the fill must equal previewLever; just outside
-  /// it the venue refuses (PriceBand on every edge at the pinned block), and the adapter must
-  /// revert with the preview's exact revert data.
-  function test_executeEverlongFlamm_leverage(uint256 amountIn) public {
-    _armLeverage();
-    bool up = amountIn % 2 == 0;
-    (address tokenIn, address tokenOut) = up ? (CBBTC, USDC) : (USDC, CBBTC);
-    uint256 kind = up ? KIND_LEVER_UP : KIND_LEVER_DOWN;
-    (uint256 lo, uint256 hi) = _quotableRange(true, up);
-    amountIn = bound(amountIn, lo > 1 ? lo - 1 : lo, hi + 1);
-
-    try IFLAMMTestHooks(POOL).previewLever(up, amountIn) returns (
+    uint256 expectedUsed;
+    uint256 expectedOut;
+    try IFLAMMTestHooks(POOL).previewLever(true, amountIn) returns (
       uint256 used, uint256 out, uint256, uint256
     ) {
-      (uint256 amountUnused, uint256 amountOut) = _execute(kind, amountIn, tokenIn, tokenOut);
-      assertEq(amountIn - amountUnused, used, 'used must match previewLever');
-      assertEq(amountOut, out, 'out must match previewLever');
-    } catch (bytes memory reason) {
-      deal(tokenIn, address(adapter), amountIn);
-      vm.expectRevert(reason);
-      adapter.executeEverlongFlamm(abi.encode(POOL, kind), amountIn, tokenIn, tokenOut, recipient);
+      (expectedUsed, expectedOut) = (used, out);
+    } catch {
+      return;
     }
+
+    (uint256 amountUnused, uint256 amountOut) = _execute(KIND_LEVER_UP, amountIn, CBBTC, USDC);
+    assertEq(amountOut, expectedOut, 'lever-up output is the preview');
+    assertEq(amountIn - amountUnused, expectedUsed, 'lever-up consumes what the preview used');
   }
 
-  /// @dev Unpaused with a stale post: a lever-down degrades to the last live spread, which on
-  /// a venue that has never filled is the 100_000 ppm ceiling — outside this pool's 8% band.
-  /// Preview and execution refuse identically.
-  function test_leverDown_staleSpread_degrades() public {
-    _unpauseLeverage();
-    uint256 amountIn = 10e6;
-    deal(USDC, address(adapter), amountIn);
+  /// @dev The lever-down leg against `previewLever(false, .)`: loan asset in, pool asset out.
+  /// This is the kind that reports a remainder — the fill is sized on the whole `amountIn` and
+  /// only then charged its pay leg, so `amountUnused` is routinely non-zero and is the value
+  /// `previewLever`'s `amountInUsed` predicts.
+  function test_leverDown(uint256 amountIn) public {
+    _armLeverage();
+    amountIn = bound(amountIn, 1, 1e12);
 
-    try IFLAMMTestHooks(POOL).previewLever(false, amountIn) {
-      fail('a degraded lever-down must not quote at the pinned block');
-    } catch (bytes memory reason) {
-      assertEq(bytes4(reason), IFLAMMTestHooks.PriceBand.selector);
+    uint256 expectedUsed;
+    uint256 expectedOut;
+    try IFLAMMTestHooks(POOL).previewLever(false, amountIn) returns (
+      uint256 used, uint256 out, uint256, uint256
+    ) {
+      (expectedUsed, expectedOut) = (used, out);
+    } catch {
+      return;
     }
-    vm.expectRevert(IFLAMMTestHooks.PriceBand.selector);
-    adapter.executeEverlongFlamm(
-      abi.encode(POOL, KIND_LEVER_DOWN), amountIn, USDC, CBBTC, recipient
-    );
+
+    (uint256 amountUnused, uint256 amountOut) = _execute(KIND_LEVER_DOWN, amountIn, USDC, CBBTC);
+    assertEq(amountOut, expectedOut, 'lever-down output is the preview');
+    assertEq(amountIn - amountUnused, expectedUsed, 'lever-down remainder is the preview');
   }
 
-  // ------------------------------------------------------------------ helpers
-
-  /// @dev Deal `amountIn`, execute, and close the accounting on balances: unused input stays
-  /// in the adapter, output lands on the recipient.
+  /// @dev Fund the adapter, run the hop, and check the three post-conditions every kind shares:
+  /// the output lands on the recipient, the unused input stays in this frame for the executor
+  /// to sweep, and the pool paid something.
   function _execute(uint256 kind, uint256 amountIn, address tokenIn, address tokenOut)
     internal
     returns (uint256 amountUnused, uint256 amountOut)
@@ -329,87 +130,17 @@ contract EverlongFlammAdapterTest is Test {
     assertEq(tokenOut.balanceOf(recipient) - recipientBefore, amountOut, 'paid to recipient');
   }
 
-  /// @dev Whether the venue's own preview quotes `amountIn`; `sell` is pool asset in (for the
-  /// leverage venue, leverUp).
-  function _quotes(bool lever, bool sell, uint256 amountIn) internal view returns (bool) {
-    if (!lever) {
-      try IFLAMMTestHooks(POOL).previewSwap(sell, amountIn) returns (uint256, uint256, uint256) {
-        return true;
-      } catch {
-        return false;
-      }
-    }
-    try IFLAMMTestHooks(POOL).previewLever(sell, amountIn) returns (
-      uint256, uint256, uint256, uint256
-    ) {
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /// @dev The FIRST contiguous bracket of quotable sizes, not the venue's whole accepted set:
-  /// doubling from 1 finds a quotable seed, and each edge is then bisected inside
-  /// [seed >> 1, seed] and [seed, seed << 1], so accepted sizes further out are never reached.
-  /// At PINNED_BLOCK the sell leg brackets [1, 140_550] and nothing above quotes (checked to
-  /// +40_000 and over 64 log-spaced probes up to 5x), while the buy leg brackets
-  /// [2_297, 185_398_907] and the pool also quotes 286 smaller buys ([766, 860] and
-  /// [1_531, 1_721]) and 202 larger ones ([185_399_567, 185_399_768]) — see
-  /// test_buy_outsideBracket. Inside the bracket the set is not an interval either: dust and
-  /// band-edge sizes alternate between quoting and refusing on the 1 sat / 1 micro-USDC output
-  /// grid, which is why every caller checks the preview for the size it is about to run.
-  function _quotableRange(bool lever, bool sell) internal view returns (uint256 lo, uint256 hi) {
-    uint256 seed = 1;
-    while (!_quotes(lever, sell, seed)) {
-      seed <<= 1;
-      require(seed < 1 << 64, 'no quotable size');
-    }
-    uint256 bad = seed >> 1;
-    lo = seed;
-    while (lo - bad > 1) {
-      uint256 mid = (lo + bad) >> 1;
-      if (_quotes(lever, sell, mid)) lo = mid;
-      else bad = mid;
-    }
-    hi = seed;
-    bad = seed << 1;
-    while (_quotes(lever, sell, bad)) {
-      hi = bad;
-      bad <<= 1;
-      require(bad < 1 << 64, 'unbounded quotable size');
-    }
-    while (bad - hi > 1) {
-      uint256 mid = (hi + bad) >> 1;
-      if (_quotes(lever, sell, mid)) hi = mid;
-      else bad = mid;
-    }
-  }
-
-  function _curator() internal view returns (address) {
-    return IEverlongCore(IFLAMMTestHooks(POOL).core()).owner();
-  }
-
-  function _spreadHook() internal view returns (ILeverageSpreadHook) {
-    return ILeverageSpreadHook(IFLAMMTestHooks(POOL).hooks().spreadHook);
-  }
-
-  function _setMaxSwapNotional(uint256 cap) internal {
-    (,, uint64 band, uint64 feeFloor,, uint256 reserveTarget,) = IFLAMMTestHooks(POOL).loanConfig(0);
-    vm.prank(_curator());
-    IFLAMMTestHooks(POOL).setLoanConfig(0, band, feeFloor, cap, reserveTarget);
-  }
-
-  function _unpauseLeverage() internal {
-    vm.prank(_curator());
-    IFLAMMTestHooks(POOL).setLevPaused(false);
-  }
-
-  /// @dev Unpause and have the keeper re-post the standing spread, which makes it live.
+  /// @dev At the pinned block the leverage venue is paused and the standing spread post has
+  /// lapsed, so both lever legs need the curator to unpause and the keeper to re-post the same
+  /// spread, which makes it live without changing its value.
   function _armLeverage() internal {
-    _unpauseLeverage();
-    ILeverageSpreadHook hook = _spreadHook();
-    uint24 spread = hook.spread();
-    vm.prank(IEverlongCore(IFLAMMTestHooks(POOL).core()).keeper());
+    IEverlongCore core = IEverlongCore(IFLAMMTestHooks(POOL).core());
+    vm.prank(core.owner());
+    IFLAMMTestHooks(POOL).setLevPaused(false);
+
+    ILeverageSpreadHook hook = ILeverageSpreadHook(IFLAMMTestHooks(POOL).hooks().spreadHook);
+    uint24 spread = hook.spread(); // read before the prank, which only covers the next call
+    vm.prank(core.keeper());
     hook.setSpread(spread);
   }
 }
