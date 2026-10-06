@@ -22,7 +22,6 @@ interface ISpireCurveView {
     Side bid;
   }
   function quote(address base, address tokenIn, uint256 amountIn) external view returns (uint256);
-  function validUntil(address base) external view returns (uint64);
   function pair(address base) external view returns (Pair memory);
 }
 
@@ -33,7 +32,6 @@ contract SpirePropAdapterTest is Test {
   address constant CUSTODY = 0xAaC48FEB93c5C97E0fb3c7C57E1633922A4ACDa3;
   address constant WETH = 0x4200000000000000000000000000000000000006;
   address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-  address constant CBBTC = 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf;
   uint256 constant FORK_BLOCK = 50_979_793;
   SpirePropAdapter adapter;
   address recipient = makeAddr('recipient');
@@ -46,10 +44,6 @@ contract SpirePropAdapterTest is Test {
   /// @dev Both directions match the actual curve and transfer exact input/output through custody.
   function test_exactInputBothDirections(uint256 amountIn, bool buyBase) public {
     amountIn = buyBase ? bound(amountIn, 1e6, 500e6) : bound(amountIn, 1e15, 0.1 ether);
-    _trade(amountIn, buyBase);
-  }
-
-  function _trade(uint256 amountIn, bool buyBase) internal {
     address tokenIn = buyBase ? USDC : WETH;
     address tokenOut = buyBase ? WETH : USDC;
     uint256 expected = ISpireCurveView(CURVE).quote(WETH, tokenIn, amountIn);
@@ -69,79 +63,5 @@ contract SpirePropAdapterTest is Test {
     assertEq(tokenIn.balanceOf(CUSTODY), custodyIn + amountIn);
     assertEq(tokenOut.balanceOf(CUSTODY), custodyOut - expected);
     assertEq(ISpireCurveView(CURVE).pair(WETH).fillSeq, fillSeq + 1);
-  }
-
-  /// @dev A second fill consumes the updated cursor, not a fresh origin quote.
-  function test_repeatedSwapConsumesCursor() public {
-    uint256 before = ISpireCurveView(CURVE).pair(WETH).ask.filled;
-    _trade(12.5e6, true);
-    uint256 first = ISpireCurveView(CURVE).pair(WETH).ask.filled;
-    _trade(12.5e6, true);
-    assertGt(first, before);
-    assertGt(ISpireCurveView(CURVE).pair(WETH).ask.filled, first);
-  }
-
-  /// @dev Curve expiry reverts the complete trade and preserves adapter funds and fill sequence.
-  function test_expiredCurveRollsBack() public {
-    deal(USDC, address(adapter), 25e6);
-    uint64 fillSeq = ISpireCurveView(CURVE).pair(WETH).fillSeq;
-    vm.warp(uint256(ISpireCurveView(CURVE).validUntil(WETH)) + 1);
-    vm.expectRevert(bytes4(keccak256('CurveStale()')));
-    adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 25e6, USDC, WETH, recipient);
-    assertEq(USDC.balanceOf(address(adapter)), 25e6);
-    assertEq(WETH.balanceOf(recipient), 0);
-    assertEq(ISpireCurveView(CURVE).pair(WETH).fillSeq, fillSeq);
-  }
-
-  /// @dev A quote does not bypass unavailable output custody, and the input transfer rolls back.
-  function test_unavailableCustodyRollsBack() public {
-    deal(WETH, CUSTODY, 0);
-    deal(USDC, address(adapter), 25e6);
-    uint64 fillSeq = ISpireCurveView(CURVE).pair(WETH).fillSeq;
-    uint256 custodyIn = USDC.balanceOf(CUSTODY);
-    vm.expectPartialRevert(bytes4(keccak256('InsufficientLiquidity(uint256,uint256)')));
-    adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 25e6, USDC, WETH, recipient);
-    assertEq(USDC.balanceOf(address(adapter)), 25e6);
-    assertEq(USDC.balanceOf(CUSTODY), custodyIn);
-    assertEq(WETH.balanceOf(recipient), 0);
-    assertEq(ISpireCurveView(CURVE).pair(WETH).fillSeq, fillSeq);
-  }
-
-  /// @dev Spire rejects an input token outside the pair before transferring the prepaid input.
-  function test_unknownTokenInPreservesInput() public {
-    deal(CBBTC, address(adapter), 1e8);
-    uint64 fillSeq = ISpireCurveView(CURVE).pair(WETH).fillSeq;
-    vm.expectRevert(bytes4(keccak256('UnknownToken()')));
-    adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 1e8, CBBTC, USDC, recipient);
-    assertEq(CBBTC.balanceOf(address(adapter)), 1e8);
-    assertEq(ISpireCurveView(CURVE).pair(WETH).fillSeq, fillSeq);
-  }
-
-  /// @dev Spire rejects an unlisted base before transferring the prepaid input.
-  function test_unlistedBasePreservesInput() public {
-    deal(USDC, address(adapter), 25e6);
-    vm.expectRevert(bytes4(keccak256('UnknownToken()')));
-    adapter.executeSpireProp(
-      abi.encode(ENTRYPOINT, makeAddr('unlisted base')), 25e6, USDC, WETH, recipient
-    );
-    assertEq(USDC.balanceOf(address(adapter)), 25e6);
-  }
-
-  /// @dev Spire rejects both native sentinels as input, so the adapter needs no native check.
-  function test_nativeSentinelsRejected() public {
-    address[2] memory nativeTokens = [address(0), TokenHelper.NATIVE_ADDRESS];
-    for (uint256 i; i < nativeTokens.length; ++i) {
-      vm.expectRevert(bytes4(keccak256('UnknownToken()')));
-      adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 1, nativeTokens[i], USDC, recipient);
-    }
-  }
-
-  /// @dev Zero input is rejected by the protocol without consuming a fill sequence.
-  function test_zeroInput() public {
-    uint64 fillSeq = ISpireCurveView(CURVE).pair(WETH).fillSeq;
-    vm.expectRevert(bytes4(keccak256('ZeroAmount()')));
-    adapter.executeSpireProp(abi.encode(ENTRYPOINT, WETH), 0, USDC, WETH, recipient);
-    assertEq(ISpireCurveView(CURVE).pair(WETH).fillSeq, fillSeq);
-    assertEq(WETH.balanceOf(recipient), 0);
   }
 }

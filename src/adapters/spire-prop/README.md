@@ -16,7 +16,7 @@ Encode `data = abi.encode(entrypoint, base)`, the `entrypoint` and `base` return
 
 The adapter approves the exact input amount, calls `swapExactAmountIn(base, tokenIn, amountIn, 1, recipient)`, and returns the venue's `amountOut`. The enclosing Kyber router must enforce its overall minimum output and deadline. The venue enforces its own curve expiry and available output custody, consumes the complete input, and provides no independent caller deadline argument. Quote with fresh state and simulate the complete enclosing route before submission.
 
-The tests fork [Base block 50979793](https://basescan.org/block/50979793) and compare output to the deployed curve, checking recipient/custody balances and fill sequence in both directions. They cover repeated consumption, expiry and custody rollback, unknown tokens and bases, native sentinels, and zero input. Fork tests use the named RPC endpoints in `foundry.toml`; the Spire test needs `RPC_8453` (Base):
+The tests fork [Base block 50979793](https://basescan.org/block/50979793) and compare output to the deployed curve, checking recipient/custody balances and fill sequence in both directions. Fork tests use the named RPC endpoints in `foundry.toml`; the Spire test needs `RPC_8453` (Base):
 
 ```sh
 RPC_8453=<Base RPC> forge test --match-path 'test/adapters/spire-prop/*' -vv --gas-report
