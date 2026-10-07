@@ -1,6 +1,6 @@
 # Flywheel native settlement adapter — draft
 
-Robinhood mainnet (4663), September 30 native factory only. This module calls the existing settlement before and after graduation. It does not bypass fees, swap directly through the restricted canonical pool, or change deployed Flywheel contracts.
+Robinhood mainnet (4663), October 7 native factory `0xe7743b4039dbcd05c5242939aa8db274c65fcbfa` and settlement `0xad06b86264411e0278dbcebce556c913b44da004` only. This module calls the existing settlement before and after graduation. It does not bypass fees, swap directly through the restricted canonical pool, or change deployed Flywheel contracts.
 
 `executeFlywheelNative(data, amountIn, tokenIn, tokenOut, recipient)` follows the prefunded adapter convention. `data` is `abi.encode(Trade)`, with fields in this order:
 
@@ -8,7 +8,7 @@ Robinhood mainnet (4663), September 30 native factory only. This module calls th
 2. `uint256 minQuote`: minimum pairing asset bought, or gross pairing asset received on selling.
 3. `uint256 minOutput`: minimum final launch tokens or net ETH/WETH.
 4. `uint256 deadline`: Unix seconds.
-5. `bytes route`: Flywheel's authenticated single V3/V4 path, not router calldata.
+5. `bytes route`: authenticated NAT1 V3/V4 path, or the FWL1 envelope for up to two graduated native parents. It is forwarded unchanged to settlement.
 6. `uint256 minRefundETH`: positive to opt into graduation overfill refunds; zero otherwise.
 7. `bytes refundRoute`: separately protected reverse pairing-asset route; empty for WETH pairs.
 
@@ -20,7 +20,7 @@ The module requires Cancun transient storage. Its named transient reentrancy gua
 
 All three minima must come from a fresh executable quote as applicable, including the refund floor. Integration must simulate the full transaction. A `minQuote`/`minOutput` of one in a mechanics test is not an acceptable production price-protection policy.
 
-Validation completed locally: 17 unit/fuzz tests (three with 128 cases), plus ten tests on a read-only Robinhood fork at block 76791655. These cover WETH and BOOMER, curve and graduated trades, WETH wrapping, overfill graduation/refund, bad routes and rollback. Unit tests also cover a minimal delegatecalling executor, stale/invalid trades, donated balances, forwarding/rejecting recipients and reentrancy. The real Kyber executor has not yet been tested.
+Validation completed locally: 17 unit/fuzz tests (three with 128 cases), plus ten tests on a read-only Robinhood fork at block 82183340. These cover WETH and BOOMER, curve and graduated trades, WETH wrapping, overfill graduation/refund, bad routes and rollback. Unit tests also cover a minimal delegatecalling executor, stale/invalid trades, donated balances, forwarding/rejecting recipients and reentrancy. The real Kyber executor has not yet been tested.
 
 The fork tests explicitly establish the integration boundary: a direct factory trade reverts with `native adapter only`; a normal V4 PoolManager swap reverts with the hook's wrapped `native settlement only` error; an adapter round trip succeeds on the same market. Another fork test performs graduation, a subsequent sell and delivery of the unused ETH through a minimal delegatecalling executor, preserving unrelated balances.
 
@@ -34,10 +34,10 @@ forge test --match-path 'test/adapters/flywheel-fun/FlywheelNativeAdapter.t.sol'
 
 Set `FLYWHEEL_READONLY_FORK_URL` to a read-only Robinhood RPC to run `FlywheelNativeFork.t.sol`. The tests only execute transactions in Foundry's local EVM. Fork tests skip explicitly when this variable is missing. No private key is needed.
 
-The companion `kyberswap-dex-lib` contribution includes a portable read-only RPC proxy and runner at `pkg/liquidity-source/flywheel-fun/testdata/runner`. With both contributions checked out as sibling repositories, install that runner's locked npm dependencies and set `FLYWHEEL_RPC_URL` through the environment. Run `node run-forks.cjs adapter` for this suite or `node run-forks.cjs quotes` for the 32 Go quote/execution comparisons. `FLYWHEEL_ADAPTER_LIB_DIR` overrides the sibling checkout path. Upstream writes and signatures are denied; results remain local.
+The companion `kyberswap-dex-lib` contribution includes a portable read-only RPC proxy and runner at `pkg/liquidity-source/flywheel-fun/testdata/runner`. With both contributions checked out as sibling repositories, install that runner's locked npm dependencies and set `FLYWHEEL_RPC_URL` through the environment. Run `node run-forks.cjs adapter` for this suite or `node run-forks.cjs quotes` for the 46 Go quote/execution comparisons. `FLYWHEEL_ADAPTER_LIB_DIR` overrides the sibling checkout path. Upstream writes and signatures are denied; results remain local.
 
-The companion dex-lib draft implements composite quotes and the ABI-encoded Trade payload, with 32 exact local-fork buy/sell comparisons covering WETH, BOOMER and PONS, graduated markets and graduation refunds. This does not validate Kyber's outer execution envelope.
+The companion dex-lib contribution implements composite quotes and serialized settlement route bytes, with 46 exact local-fork buy/sell comparisons covering WETH, BOOMER and PONS, graduated markets, graduation refunds, and one- and two-parent native Flywheel routes. Its test harness builds the ABI-encoded Trade payload; Kyber's production calldata builder must populate the minima, deadline and refund fields. Each parent market charges its own fees. This does not validate Kyber's outer execution envelope.
 
 Pending before activation: Kyber's deployed Robinhood executor/router, its refund and delegatecall integration, backend outer calldata integration, routing-engine split routes and shared-pool behavior, measured production gas estimates, and Kyber review/deployment.
 
-Contract ABIs, sources and accounting: https://flywheel.cash/integrations/20260930/index.html
+Contract ABIs, sources and accounting: https://flywheel.cash/integrations/20261007/index.html

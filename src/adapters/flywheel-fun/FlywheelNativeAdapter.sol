@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import '../../libraries/TokenHelper.sol';
 import './IFlywheelNative.sol';
 
-/// @notice Execution module for the September 30 native-settlement factory only.
+/// @notice Execution module for the October 7 replacement native-settlement factory only.
 /// @dev Prefunded, atomic executor module following Kyber's adapter convention.
 /// Not a custody vault: never leave user funds in this public adapter between calls.
 /// Executor integration must permit ETH callbacks and must not call this module
@@ -12,8 +12,8 @@ import './IFlywheelNative.sol';
 contract FlywheelNativeAdapter {
   using TokenHelper for address;
 
-  address public constant FACTORY = 0xEE54DA52128dd851c71b1c58d371966231B66C40;
-  address public constant SETTLEMENT = 0x04111c295399582B2B702Ad5De8d11be2B50dD5D;
+  address public constant FACTORY = 0xe7743b4039DBCd05C5242939aA8db274c65fCBfA;
+  address public constant SETTLEMENT = 0xaD06B86264411e0278DbCebce556c913b44dA004;
   address public constant WETH = 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73;
   bytes32 private constant LOCK = keccak256('kyberswap.adapter.flywheel.native.reentrancy');
 

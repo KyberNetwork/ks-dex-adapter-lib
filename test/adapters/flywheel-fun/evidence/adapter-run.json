@@ -1,12 +1,11 @@
 {
   "passed": true,
-  "forkBlock": 76791655,
-  "reads": 411,
-  "readLimit": 900,
-  "deniedMethods": {
+  "block": 82183340,
+  "reads": 427,
+  "blockedMethods": {
     "anvil_nodeInfo": 2,
     "eth_getAccountInfo": 1
   },
   "mainnetTransactions": 0,
-  "at": "2026-10-03T16:54:54.375Z"
+  "at": "2026-10-07T04:17:01.747Z"
 }

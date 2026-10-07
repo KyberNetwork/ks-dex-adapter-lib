@@ -117,10 +117,10 @@ contract FlywheelForkExecutor {
 contract FlywheelNativeForkTest is Test {
   address constant ETH = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
   address constant BOOMER = 0x73c2dE14C7FA0a57cc2d9722b959eA70B881fFe4;
-  address constant WETH_POOL = 0x644c1eB68E1c764B3115a37A9EF8703Fb3590735;
-  address constant BOOMER_POOL = 0x985de77F500890C80E0B23d162Aa8F534da0c37E;
-  address constant BOOMER_CURVE = 0x7e2c6EF342E2B8F9DEDB25B5CaB4ea8eDAe5d3C5;
-  address constant GATEWAY = 0x8728D5073da6C9d30843f7E8B5A8dF2392C49d85;
+  address constant WETH_POOL = 0x3245AF253DC425459c331b2FF8b2fe170D781aE5;
+  address constant BOOMER_POOL = 0x0d451b146208549B4C6bDc86d8aE7830f91eFD84;
+  address BOOMER_CURVE;
+  address constant GATEWAY = 0x341649D9A20fAf349aB8F1a1a4449bDa47cFAb35;
 
   struct Key {
     address currency0;
@@ -138,11 +138,12 @@ contract FlywheelNativeForkTest is Test {
       vm.skip(true);
       return;
     }
-    vm.createSelectFork(rpc, 76_791_655);
+    vm.createSelectFork(rpc, 82_183_340);
     require(block.chainid == 4663, 'wrong fork');
     adapter = new FlywheelNativeAdapter();
     recipient = makeAddr('kyber-user');
     vm.deal(address(this), 1 ether);
+    BOOMER_CURVE = launchCustomCurve(BOOMER, 1e24);
   }
 
   function route(bool boomer) internal pure returns (bytes memory) {
@@ -245,8 +246,12 @@ contract FlywheelNativeForkTest is Test {
   }
 
   function launchCurve(uint256 threshold) internal returns (address) {
+    return launchCustomCurve(adapter.WETH(), threshold);
+  }
+
+  function launchCustomCurve(address pairing, uint256 threshold) internal returns (address) {
     IFlywheelTestGateway.Launch memory config;
-    config.quote = adapter.WETH();
+    config.quote = pairing;
     config.name = 'KYBER LOCAL FORK ONLY';
     config.symbol = 'KYBERTEST';
     config.supply = 1e29;
