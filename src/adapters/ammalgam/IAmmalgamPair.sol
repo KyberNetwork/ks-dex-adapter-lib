@@ -2,8 +2,6 @@
 pragma solidity ^0.8.0;
 
 interface IAmmalgamPair {
-  function underlyingTokens() external view returns (address tokenX, address tokenY);
-
   function getReserves()
     external
     view

@@ -18,8 +18,6 @@ contract AmmalgamAdapter {
   uint256 private constant BORROW_X = 4;
   uint256 private constant BORROW_Y = 5;
 
-  error InvalidSwapPath(address tokenIn, address tokenOut, address tokenX, address tokenY);
-
   function executeAmmalgam(
     bytes calldata data,
     uint256 amountIn,
@@ -28,54 +26,34 @@ contract AmmalgamAdapter {
     address recipient
   ) external payable returns (uint256 amountUnused, uint256 amountOut) {
     IAmmalgamPair pair = IAmmalgamPair(data.decodeAddress(0));
-    (address tokenX, address tokenY) = pair.underlyingTokens();
+    bool xToY = tokenIn < tokenOut;
+    amountOut = _computeExpectedSwapOutAmount(amountIn, pair, xToY);
 
-    uint256 expectedAmountOut;
-    bool xToY;
-    if (tokenIn == tokenX && tokenOut == tokenY) {
-      xToY = true;
-      expectedAmountOut = _computeExpectedSwapOutAmountXToY(amountIn, pair);
-    } else if (tokenIn == tokenY && tokenOut == tokenX) {
-      expectedAmountOut = _computeExpectedSwapOutAmountYToX(amountIn, pair);
-    } else {
-      revert InvalidSwapPath(tokenIn, tokenOut, tokenX, tokenY);
-    }
-
-    uint256 balanceOutBefore = tokenOut.balanceOf(recipient);
     tokenIn.safeTransfer(address(pair), amountIn);
 
     if (xToY) {
-      pair.swap(0, expectedAmountOut, recipient, '');
+      pair.swap(0, amountOut, recipient, '');
     } else {
-      pair.swap(expectedAmountOut, 0, recipient, '');
+      pair.swap(amountOut, 0, recipient, '');
     }
 
-    amountUnused = 0;
-    amountOut = tokenOut.balanceOf(recipient) - balanceOutBefore;
+    return (amountUnused, amountOut);
   }
 
-  function _computeExpectedSwapOutAmountXToY(uint256 amountIn, IAmmalgamPair pair)
-    private
+  function _computeExpectedSwapOutAmount(uint256 amountIn, IAmmalgamPair pair, bool xToY)
+    internal
     view
     returns (uint256 amountOut)
   {
-    (uint112 reserveIn, uint112 reserveOut,) = pair.getReserves();
-    (uint112 referenceReserveIn,) = pair.referenceReserves();
-    (uint256 missingIn, uint256 missingOut) = _pairMissingAssets(pair);
+    (uint112 reserveX, uint112 reserveY,) = pair.getReserves();
+    (uint112 referenceReserveX, uint112 referenceReserveY) = pair.referenceReserves();
+    (uint256 missingX, uint256 missingY) = _pairMissingAssets(pair);
 
-    amountOut = DepletedAssetUtils.computeExpectedSwapOutAmount(
-      amountIn, reserveIn, referenceReserveIn, reserveOut, missingIn, missingOut
-    );
-  }
-
-  function _computeExpectedSwapOutAmountYToX(uint256 amountIn, IAmmalgamPair pair)
-    private
-    view
-    returns (uint256 amountOut)
-  {
-    (uint112 reserveOut, uint112 reserveIn,) = pair.getReserves();
-    (, uint112 referenceReserveIn) = pair.referenceReserves();
-    (uint256 missingOut, uint256 missingIn) = _pairMissingAssets(pair);
+    uint256 reserveIn = xToY ? reserveX : reserveY;
+    uint256 reserveOut = xToY ? reserveY : reserveX;
+    uint256 referenceReserveIn = xToY ? referenceReserveX : referenceReserveY;
+    uint256 missingIn = xToY ? missingX : missingY;
+    uint256 missingOut = xToY ? missingY : missingX;
 
     amountOut = DepletedAssetUtils.computeExpectedSwapOutAmount(
       amountIn, reserveIn, referenceReserveIn, reserveOut, missingIn, missingOut
