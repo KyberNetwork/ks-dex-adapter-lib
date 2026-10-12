@@ -41,7 +41,7 @@ contract BTRAdapterForkTest is Test {
   function setUp() public {
     try vm.createSelectFork('monad_mainnet') {}
     catch {
-      vm.skip(true, 'Monad fork needs the Monad EVM: run with FOUNDRY_NETWORK=monad');
+      vm.skip(true, 'Monad fork unavailable: needs RPC_143 (and FOUNDRY_NETWORK=monad)');
     }
     adapter = new BTRAdapter();
     executor = new BTRTestExecutor();
