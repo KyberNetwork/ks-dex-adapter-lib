@@ -6,12 +6,21 @@ import 'forge-std/Test.sol';
 import 'src/adapters/ammalgam/AmmalgamAdapter.sol';
 
 contract AmmalgamAdapterHarness is AmmalgamAdapter {
-  function computeExpectedSwapOutAmount(uint256 amountIn, IAmmalgamPair pair, bool xToY)
-    external
-    view
-    returns (uint256 amountOut)
-  {
-    return _computeExpectedSwapOutAmount(amountIn, pair, xToY);
+  function computeExpectedSwapOutAmount(
+    uint256 amountIn,
+    bool xToY,
+    uint256 reserveX,
+    uint256 reserveY,
+    uint256 referenceReserveX,
+    uint256 referenceReserveY,
+    uint256 missingX,
+    uint256 missingY
+  ) external pure returns (uint256 amountOut) {
+    return _computeExpectedSwapOutAmount(
+      amountIn,
+      xToY,
+      SwapState(reserveX, reserveY, referenceReserveX, referenceReserveY, missingX, missingY)
+    );
   }
 }
 
@@ -52,7 +61,24 @@ contract AmmalgamAdapterTest is Test {
 
     amountIn = bound(amountIn, reserveIn / 10_000, reserveIn / 100);
     pool.sync();
-    uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(amountIn, pool, xToY);
+    (
+      uint256 currentReserveX,
+      uint256 currentReserveY,
+      uint256 referenceReserveX,
+      uint256 referenceReserveY,
+      uint256 missingX,
+      uint256 missingY
+    ) = _pairState(pool);
+    uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(
+      amountIn,
+      xToY,
+      currentReserveX,
+      currentReserveY,
+      referenceReserveX,
+      referenceReserveY,
+      missingX,
+      missingY
+    );
 
     deal(tokenIn, address(this), amountIn);
     tokenIn.safeTransfer(address(pool), amountIn);
@@ -67,7 +93,7 @@ contract AmmalgamAdapterTest is Test {
     assertEq(tokenOut.balanceOf(recipient) - balanceOutBefore, expectedAmountOut);
   }
 
-  function test_executeAmmalgam_syncsBeforeLendingCheckpointQuote() public {
+  function test_executeAmmalgam_quoteMatchesCheckpointedSwapMaximum() public {
     vm.createSelectFork('mainnet', 26_181_593);
     adapter = new AmmalgamAdapterHarness();
     IAmmalgamPair pool = IAmmalgamPair(USDC_WETH);
@@ -81,12 +107,103 @@ contract AmmalgamAdapterTest is Test {
     assertGe(currentTimestamp - lastLendingTimestamp, 1 days - 1);
     assertLt(currentTimestamp - lastUpdateTimestamp, 1 days - 1);
 
+    uint256 maxAmountOut = _maxAcceptedAmountOut(pool, amountIn);
+    uint256 directSwapSnapshot = vm.snapshotState();
+    deal(WETH, address(this), amountIn);
+    WETH.safeTransfer(address(pool), amountIn);
+    vm.recordLogs();
+    pool.swap(maxAmountOut, 0, recipient, '');
+    Vm.Log[] memory directSwapLogs = vm.getRecordedLogs();
+    (uint256 checkpointedReserveX, uint256 checkpointedReserveY, uint256 expectedSyncCount) =
+      _syncState(directSwapLogs, address(pool));
+    (uint112 expectedReferenceReserveX, uint112 expectedReferenceReserveY) =
+      pool.referenceReserves();
+    (uint112[6] memory checkpointedAssets,) = pool.totalAssetsAndShares(false);
+    uint256 checkpointedMissingX = checkpointedAssets[4] > checkpointedAssets[1]
+      ? checkpointedAssets[4] - checkpointedAssets[1]
+      : 0;
+    uint256 checkpointedMissingY = checkpointedAssets[5] > checkpointedAssets[2]
+      ? checkpointedAssets[5] - checkpointedAssets[2]
+      : 0;
+    vm.revertToState(directSwapSnapshot);
+
     deal(WETH, address(adapter), amountIn);
     uint256 balanceOutBefore = USDC.balanceOf(recipient);
-    (, uint256 amountOut) =
-      adapter.executeAmmalgam(abi.encode(address(pool)), amountIn, WETH, USDC, recipient);
+    vm.recordLogs();
+    (, uint256 amountOut) = adapter.executeAmmalgam(
+      abi.encode(
+        address(pool),
+        checkpointedReserveX,
+        checkpointedReserveY,
+        expectedReferenceReserveX,
+        expectedReferenceReserveY,
+        checkpointedMissingX,
+        checkpointedMissingY
+      ),
+      amountIn,
+      WETH,
+      USDC,
+      recipient
+    );
+    Vm.Log[] memory adapterLogs = vm.getRecordedLogs();
+    (
+      uint256 actualCheckpointedReserveX,
+      uint256 actualCheckpointedReserveY,
+      uint256 actualSyncCount
+    ) = _syncState(adapterLogs, address(pool));
 
+    assertEq(amountOut, maxAmountOut);
     assertEq(USDC.balanceOf(recipient) - balanceOutBefore, amountOut);
+    assertEq(actualSyncCount, expectedSyncCount);
+    assertEq(actualCheckpointedReserveX, checkpointedReserveX);
+    assertEq(actualCheckpointedReserveY, checkpointedReserveY);
+    (uint112 actualReferenceReserveX, uint112 actualReferenceReserveY) = pool.referenceReserves();
+    assertEq(actualReferenceReserveX, expectedReferenceReserveX);
+    assertEq(actualReferenceReserveY, expectedReferenceReserveY);
+  }
+
+  function test_executeAmmalgam_revertsForIncompleteData() public {
+    vm.expectRevert(AmmalgamAdapter.InvalidDataLength.selector);
+    adapter.executeAmmalgam(abi.encode(USDC_WETH), 1, USDC, WETH, recipient);
+  }
+
+  function _syncState(Vm.Log[] memory logs, address pool)
+    private
+    pure
+    returns (uint256 reserveX, uint256 reserveY, uint256 count)
+  {
+    bytes32 syncTopic = keccak256('Sync(uint256,uint256)');
+    for (uint256 i; i < logs.length; ++i) {
+      if (logs[i].emitter == pool && logs[i].topics[0] == syncTopic) {
+        if (count == 0) (reserveX, reserveY) = abi.decode(logs[i].data, (uint256, uint256));
+        ++count;
+      }
+    }
+  }
+
+  function _maxAcceptedAmountOut(IAmmalgamPair pool, uint256 amountIn)
+    private
+    returns (uint256 amountOut)
+  {
+    (uint112 reserveX,,) = pool.getReserves();
+    uint256 high = reserveX - 1;
+
+    while (amountOut < high) {
+      uint256 candidate = (amountOut + high + 1) / 2;
+      uint256 snapshotId = vm.snapshotState();
+
+      deal(WETH, address(this), amountIn);
+      WETH.safeTransfer(address(pool), amountIn);
+      (bool success,) =
+        address(pool).call(abi.encodeCall(IAmmalgamPair.swap, (candidate, 0, recipient, bytes(''))));
+
+      vm.revertToState(snapshotId);
+      if (success) {
+        amountOut = candidate;
+      } else {
+        high = candidate - 1;
+      }
+    }
   }
 
   function testFuzz_executeAmmalgam_returnsQuotedAmount(
@@ -106,18 +223,72 @@ contract AmmalgamAdapterTest is Test {
 
     amountIn = bound(amountIn, reserveIn / 10_000, reserveIn / 100);
     pool.sync();
-    uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(amountIn, pool, xToY);
+    (
+      uint256 currentReserveX,
+      uint256 currentReserveY,
+      uint256 referenceReserveX,
+      uint256 referenceReserveY,
+      uint256 missingX,
+      uint256 missingY
+    ) = _pairState(pool);
+    uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(
+      amountIn,
+      xToY,
+      currentReserveX,
+      currentReserveY,
+      referenceReserveX,
+      referenceReserveY,
+      missingX,
+      missingY
+    );
     deal(tokenIn, address(adapter), amountIn);
 
     vm.mockCall(
       tokenOut, abi.encodeWithSignature('balanceOf(address)', recipient), abi.encode(uint256(0))
     );
-    (uint256 amountUnused, uint256 amountOut) =
-      adapter.executeAmmalgam(abi.encode(address(pool)), amountIn, tokenIn, tokenOut, recipient);
+    (uint256 amountUnused, uint256 amountOut) = adapter.executeAmmalgam(
+      abi.encode(
+        address(pool),
+        currentReserveX,
+        currentReserveY,
+        referenceReserveX,
+        referenceReserveY,
+        missingX,
+        missingY
+      ),
+      amountIn,
+      tokenIn,
+      tokenOut,
+      recipient
+    );
 
     assertEq(amountUnused, 0);
     assertEq(amountOut, expectedAmountOut);
     assertEq(tokenIn.balanceOf(address(adapter)), 0);
+  }
+
+  function _pairState(IAmmalgamPair pool)
+    private
+    view
+    returns (
+      uint256 reserveX,
+      uint256 reserveY,
+      uint256 referenceReserveX,
+      uint256 referenceReserveY,
+      uint256 missingX,
+      uint256 missingY
+    )
+  {
+    (uint112 pairReserveX, uint112 pairReserveY,) = pool.getReserves();
+    (uint112 pairReferenceReserveX, uint112 pairReferenceReserveY) = pool.referenceReserves();
+    (uint112[6] memory allAssets,) = pool.totalAssetsAndShares(false);
+
+    reserveX = pairReserveX;
+    reserveY = pairReserveY;
+    referenceReserveX = pairReferenceReserveX;
+    referenceReserveY = pairReferenceReserveY;
+    missingX = allAssets[4] > allAssets[1] ? allAssets[4] - allAssets[1] : 0;
+    missingY = allAssets[5] > allAssets[2] ? allAssets[5] - allAssets[2] : 0;
   }
 
   function _tokens(uint256 poolIndex) private pure returns (address tokenX, address tokenY) {
