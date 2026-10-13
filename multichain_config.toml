@@ -36,3 +36,5 @@ endpoint_url = "${RPC_143}"
 endpoint_url = "${RPC_4326}"
 [4153]
 endpoint_url = "${RPC_4153}"
+[4663]
+endpoint_url = "${RPC_4663}"
