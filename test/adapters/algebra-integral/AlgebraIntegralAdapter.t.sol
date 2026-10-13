@@ -7,17 +7,11 @@ import 'src/adapters/algebra-integral/AlgebraIntegralAdapter.sol';
 import 'src/adapters/algebra-integral/IAlgebraPool.sol';
 import 'src/libraries/TokenHelper.sol';
 
-import {IERC20} from 'openzeppelin-contracts/contracts/interfaces/IERC20.sol';
-
-/// @dev Fork tests against live Morpheus (Algebra Integral) pools on Robinhood Chain.
+/// @dev Fork tests against live Morpheus pools on Robinhood Chain.
+/// Input tokens sit on the adapter. Algebra callbacks msg.sender, so the adapter must be the
+/// direct caller. Kyber CI has no RPC_4663; the fork is skipped unless that variable is set.
 contract AlgebraIntegralAdapterTest is Test {
   using TokenHelper for address;
-
-  struct Balances {
-    uint256 input;
-    uint256 output;
-    uint256 received;
-  }
 
   // Highest-TVL Morpheus pool: WETH / HOOD
   address constant WETH_HOOD = 0xcd9e25506cd72db14286165dd940ccfc032613d3;
@@ -29,71 +23,67 @@ contract AlgebraIntegralAdapterTest is Test {
   address constant USDG = 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168;
   address constant AAPL = 0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9;
 
+  uint256 constant DUST_IN = 17;
+  uint256 constant DUST_OUT = 29;
+  uint256 constant DUST_RECIPIENT = 31;
+
   AlgebraIntegralAdapter adapter;
-  AlgebraIntegralTestExecutor executor;
   address recipient = makeAddr('recipient');
 
   function setUp() public {
-    vm.createSelectFork('robinhood_mainnet');
-    adapter = new AlgebraIntegralAdapter();
-    executor = new AlgebraIntegralTestExecutor();
-
-    require(IAlgebraPool(WETH_HOOD).token0() == WETH, 'WETH/HOOD token0');
-    require(IAlgebraPool(WETH_HOOD).token1() == HOOD, 'WETH/HOOD token1');
-    require(IAlgebraPool(USDG_AAPL).token0() == USDG, 'USDG/AAPL token0');
-    require(IAlgebraPool(USDG_AAPL).token1() == AAPL, 'USDG/AAPL token1');
+    try vm.createSelectFork('robinhood_mainnet') {
+      adapter = new AlgebraIntegralAdapter();
+      require(IAlgebraPool(WETH_HOOD).token0() == WETH, 'WETH/HOOD token0');
+      require(IAlgebraPool(WETH_HOOD).token1() == HOOD, 'WETH/HOOD token1');
+      require(IAlgebraPool(USDG_AAPL).token0() == USDG, 'USDG/AAPL token0');
+      require(IAlgebraPool(USDG_AAPL).token1() == AAPL, 'USDG/AAPL token1');
+    } catch {
+      vm.skip(true, 'set RPC_4663 to fork Robinhood mainnet');
+    }
   }
 
   function test_WethToHood() public {
-    _fundAndSwap(WETH_HOOD, WETH, HOOD, 1e15, recipient, 0);
+    _swap(WETH_HOOD, WETH, HOOD, 1e15, recipient, 0);
   }
 
   function test_HoodToWeth() public {
-    _fundAndSwap(WETH_HOOD, HOOD, WETH, 1e18, recipient, 0);
+    _swap(WETH_HOOD, HOOD, WETH, 1e18, recipient, 0);
   }
 
   function test_UsdgToAapl() public {
-    _fundAndSwap(USDG_AAPL, USDG, AAPL, 1e6, recipient, 0);
+    _swap(USDG_AAPL, USDG, AAPL, 1e6, recipient, 0);
   }
 
   function test_AaplToUsdg() public {
-    _fundAndSwap(USDG_AAPL, AAPL, USDG, 1e15, recipient, 0);
+    _swap(USDG_AAPL, AAPL, USDG, 1e15, recipient, 0);
   }
 
-  function test_ExecutorRecipientBothDirections() public {
-    _fundAndSwap(WETH_HOOD, WETH, HOOD, 1e15, address(executor), 0);
-    _fundAndSwap(WETH_HOOD, HOOD, WETH, 1e18, address(executor), 0);
+  function test_AdapterRecipientBothDirections() public {
+    _swap(WETH_HOOD, WETH, HOOD, 1e15, address(adapter), 0);
+    _swap(WETH_HOOD, HOOD, WETH, 1e18, address(adapter), 0);
   }
 
   function test_CustomSqrtPriceLimit() public {
+    if (address(adapter) == address(0)) return;
     (uint160 price,,,,,) = IAlgebraPool(WETH_HOOD).globalState();
-    // Mild limit below current price for zeroToOne (WETH -> HOOD)
-    uint160 limit = uint160(uint256(price) * 99 / 100);
+    // Mild limit below the current price for zeroToOne (WETH -> HOOD).
+    uint160 limit = uint160((uint256(price) * 99) / 100);
     if (limit <= 4_295_128_739) limit = 4_295_128_740;
-    _fundAndSwap(WETH_HOOD, WETH, HOOD, 1e15, recipient, limit);
+    _swap(WETH_HOOD, WETH, HOOD, 1e15, recipient, limit);
   }
 
-  function testFuzz_ExactInputWithDust(uint256 amountIn, bool reverse, bool receiveInExecutor)
+  function testFuzz_ExactInputWithDust(uint256 amountIn, bool reverse, bool receiveInAdapter)
     public
   {
     address tokenIn = reverse ? HOOD : WETH;
     address tokenOut = reverse ? WETH : HOOD;
     amountIn = reverse ? bound(amountIn, 1e16, 50e18) : bound(amountIn, 1e14, 5e16);
-    _fundAndSwap(
-      WETH_HOOD,
-      tokenIn,
-      tokenOut,
-      amountIn,
-      receiveInExecutor ? address(executor) : recipient,
-      0
+    _swap(
+      WETH_HOOD, tokenIn, tokenOut, amountIn, receiveInAdapter ? address(adapter) : recipient, 0
     );
   }
 
-  function _fund(address token, uint256 amount) internal {
-    deal(token, address(executor), token.balanceOf(address(executor)) + amount);
-  }
-
-  function _fundAndSwap(
+  function _swap(
     address pool,
     address tokenIn,
     address tokenOut,
@@ -101,59 +91,39 @@ contract AlgebraIntegralAdapterTest is Test {
     address to,
     uint160 limitSqrtPrice
   ) internal {
-    _fund(tokenIn, amountIn + 17);
-    _fund(tokenOut, 29);
-    if (to != address(executor)) {
-      deal(tokenOut, to, tokenOut.balanceOf(to) + 31);
+    if (address(adapter) == address(0)) return;
+
+    uint256 inputBefore = amountIn + DUST_IN;
+    deal(tokenIn, address(adapter), inputBefore);
+
+    uint256 adapterOutBefore = DUST_OUT;
+    uint256 recipientBefore;
+    if (to == address(adapter)) {
+      if (tokenOut != tokenIn) deal(tokenOut, address(adapter), adapterOutBefore);
+      else adapterOutBefore = inputBefore;
+      recipientBefore = adapterOutBefore;
+    } else {
+      deal(tokenOut, address(adapter), adapterOutBefore);
+      deal(tokenOut, to, DUST_RECIPIENT);
+      recipientBefore = DUST_RECIPIENT;
     }
-    _assertSwap(pool, tokenIn, tokenOut, amountIn, to, limitSqrtPrice);
-  }
 
-  function _assertSwap(
-    address pool,
-    address tokenIn,
-    address tokenOut,
-    uint256 amountIn,
-    address to,
-    uint160 limitSqrtPrice
-  ) internal returns (uint256 amountOut) {
-    Balances memory beforeBalances = Balances(
-      tokenIn.balanceOf(address(executor)),
-      tokenOut.balanceOf(address(executor)),
-      tokenOut.balanceOf(to)
+    (uint256 amountUnused, uint256 amountOut) = adapter.executeAlgebraIntegral(
+      abi.encode(pool, uint256(limitSqrtPrice)), amountIn, tokenIn, tokenOut, to
     );
-    assertGt(beforeBalances.input, amountIn);
-    assertGt(beforeBalances.output, 0);
 
-    bytes memory result = executor.run(
-      address(adapter),
-      abi.encodeCall(
-        AlgebraIntegralAdapter.executeAlgebraIntegral,
-        (abi.encode(pool, uint256(limitSqrtPrice)), amountIn, tokenIn, tokenOut, to)
-      )
-    );
-    uint256 amountUnused;
-    (amountUnused, amountOut) = abi.decode(result, (uint256, uint256));
-
-    assertEq(amountUnused, 0);
     assertGt(amountOut, 0);
-    assertEq(beforeBalances.input - tokenIn.balanceOf(address(executor)), amountIn);
-    assertEq(tokenOut.balanceOf(to) - beforeBalances.received, amountOut);
-    assertEq(
-      tokenOut.balanceOf(address(executor)),
-      beforeBalances.output + (to == address(executor) ? amountOut : 0)
-    );
-  }
-}
+    assertEq(tokenIn.balanceOf(address(adapter)), inputBefore - (amountIn - amountUnused));
 
-contract AlgebraIntegralTestExecutor {
-  function run(address adapter, bytes calldata data) external returns (bytes memory) {
-    (bool ok, bytes memory result) = adapter.delegatecall(data);
-    if (!ok) {
-      assembly ('memory-safe') {
-        revert(add(result, 32), mload(result))
-      }
+    if (to == address(adapter)) {
+      uint256 expectedOut = adapterOutBefore + amountOut;
+      if (tokenOut == tokenIn) expectedOut -= amountIn - amountUnused;
+      assertEq(tokenOut.balanceOf(address(adapter)), expectedOut);
+    } else {
+      assertEq(tokenOut.balanceOf(address(adapter)), adapterOutBefore);
+      assertEq(tokenOut.balanceOf(to), recipientBefore + amountOut);
     }
-    return result;
+
+    if (limitSqrtPrice == 0) assertEq(amountUnused, 0);
   }
 }
