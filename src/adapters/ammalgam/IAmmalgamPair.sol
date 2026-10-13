@@ -17,5 +17,7 @@ interface IAmmalgamPair {
     view
     returns (uint112[6] memory allAssets, uint112[6] memory allShares);
 
+  function sync() external;
+
   function swap(uint256 amountXOut, uint256 amountYOut, address to, bytes calldata data) external;
 }

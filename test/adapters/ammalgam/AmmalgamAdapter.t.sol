@@ -51,6 +51,7 @@ contract AmmalgamAdapterTest is Test {
     uint256 reserveIn = xToY ? reserveX : reserveY;
 
     amountIn = bound(amountIn, reserveIn / 10_000, reserveIn / 100);
+    pool.sync();
     uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(amountIn, pool, xToY);
 
     deal(tokenIn, address(this), amountIn);
@@ -64,6 +65,28 @@ contract AmmalgamAdapterTest is Test {
     }
 
     assertEq(tokenOut.balanceOf(recipient) - balanceOutBefore, expectedAmountOut);
+  }
+
+  function test_executeAmmalgam_syncsBeforeLendingCheckpointQuote() public {
+    vm.createSelectFork('mainnet', 26_181_593);
+    adapter = new AmmalgamAdapterHarness();
+    IAmmalgamPair pool = IAmmalgamPair(USDC_WETH);
+    bytes32 lendingSlot = vm.load(address(pool), bytes32(uint256(17)));
+    uint32 lastLendingTimestamp = uint32(uint256(lendingSlot) >> 224);
+    vm.warp(block.timestamp + 72_000);
+
+    (, uint112 reserveY, uint32 lastUpdateTimestamp) = pool.getReserves();
+    uint256 amountIn = reserveY / 1000;
+    uint32 currentTimestamp = uint32(block.timestamp);
+    assertGe(currentTimestamp - lastLendingTimestamp, 1 days - 1);
+    assertLt(currentTimestamp - lastUpdateTimestamp, 1 days - 1);
+
+    deal(WETH, address(adapter), amountIn);
+    uint256 balanceOutBefore = USDC.balanceOf(recipient);
+    (, uint256 amountOut) =
+      adapter.executeAmmalgam(abi.encode(address(pool)), amountIn, WETH, USDC, recipient);
+
+    assertEq(USDC.balanceOf(recipient) - balanceOutBefore, amountOut);
   }
 
   function testFuzz_executeAmmalgam_returnsQuotedAmount(
@@ -82,6 +105,7 @@ contract AmmalgamAdapterTest is Test {
     uint256 reserveIn = xToY ? reserveX : reserveY;
 
     amountIn = bound(amountIn, reserveIn / 10_000, reserveIn / 100);
+    pool.sync();
     uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(amountIn, pool, xToY);
     deal(tokenIn, address(adapter), amountIn);
 

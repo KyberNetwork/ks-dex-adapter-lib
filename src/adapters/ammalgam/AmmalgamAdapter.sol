@@ -27,6 +27,8 @@ contract AmmalgamAdapter {
   ) external payable returns (uint256 amountUnused, uint256 amountOut) {
     IAmmalgamPair pair = IAmmalgamPair(data.decodeAddress(0));
     bool xToY = tokenIn < tokenOut;
+    // Checkpoint before quoting, and before amountIn can be included in the synced reserves.
+    pair.sync();
     amountOut = _computeExpectedSwapOutAmount(amountIn, pair, xToY);
 
     tokenIn.safeTransfer(address(pair), amountIn);
