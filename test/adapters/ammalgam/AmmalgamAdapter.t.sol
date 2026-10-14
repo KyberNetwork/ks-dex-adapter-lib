@@ -4,23 +4,16 @@ pragma solidity ^0.8.0;
 import 'forge-std/Test.sol';
 
 import 'src/adapters/ammalgam/AmmalgamAdapter.sol';
+import 'src/adapters/ammalgam/IAmmalgamPair.sol';
+import 'src/adapters/ammalgam/libraries/DepletedAssetUtils.sol';
+import 'src/adapters/ammalgam/libraries/QuadraticSwapFees.sol';
 
 contract AmmalgamAdapterHarness is AmmalgamAdapter {
-  function computeExpectedSwapOutAmount(
-    uint256 amountIn,
-    bool xToY,
-    uint256 reserveX,
-    uint256 reserveY,
-    uint256 referenceReserveX,
-    uint256 referenceReserveY,
-    uint256 missingX,
-    uint256 missingY
-  ) external pure returns (uint256 amountOut) {
-    return _computeExpectedSwapOutAmount(
-      amountIn,
-      xToY,
-      SwapState(reserveX, reserveY, referenceReserveX, referenceReserveY, missingX, missingY)
-    );
+  function computeExpectedSwapOutAmount(uint256 amountIn, IAmmalgamPair pair, bool xToY)
+    external
+    returns (uint256 amountOut)
+  {
+    return _computeExpectedSwapOutAmount(amountIn, pair, xToY);
   }
 }
 
@@ -35,6 +28,9 @@ contract AmmalgamAdapterTest is Test {
   address constant USDC_WETH = 0x728fD0A966B993fe518B00122D51e494F99aBd6a;
   address constant USDC_USDT = 0xf53D16Bc876212Ae501cCCc1949d73BB55Be4b0E;
   uint256 constant BLOCK_NUMBER = 25_949_710;
+  uint256 constant CHECKPOINT_BLOCK_NUMBER = 26_181_593;
+  uint256 constant INTEREST_PERIOD_FOR_SWAP = 1 days - 1;
+  uint256 constant LAST_LENDING_TIMESTAMP_SLOT = 17;
 
   address[] pools = [USDC_WETH, USDC_USDT];
   address recipient = makeAddr('recipient');
@@ -44,166 +40,98 @@ contract AmmalgamAdapterTest is Test {
     adapter = new AmmalgamAdapterHarness();
   }
 
-  function testFuzz_computeExpectedSwapOutAmount_pairAcceptsQuote(
-    uint256 poolIndex,
+  function testFuzz_computeExpectedSwapOutAmount_matchesMaximumAcceptedByPair(
     uint256 amountIn,
-    bool xToY
+    bool xToY,
+    bool checkpointElapsed
   ) public {
-    poolIndex = bound(poolIndex, 0, pools.length - 1);
-    IAmmalgamPair pool = IAmmalgamPair(pools[poolIndex]);
+    vm.createSelectFork('mainnet', CHECKPOINT_BLOCK_NUMBER);
+    adapter = new AmmalgamAdapterHarness();
 
-    (address tokenX, address tokenY) = _tokens(poolIndex);
-    (uint112 reserveX, uint112 reserveY,) = pool.getReserves();
+    IAmmalgamPair pool = IAmmalgamPair(USDC_WETH);
+    address tokenIn = xToY ? USDC : WETH;
+    address tokenOut = xToY ? WETH : USDC;
 
-    address tokenIn = xToY ? tokenX : tokenY;
-    address tokenOut = xToY ? tokenY : tokenX;
-    uint256 reserveIn = xToY ? reserveX : reserveY;
-
-    amountIn = bound(amountIn, reserveIn / 10_000, reserveIn / 100);
-    pool.sync();
-    (
-      uint256 currentReserveX,
-      uint256 currentReserveY,
-      uint256 referenceReserveX,
-      uint256 referenceReserveY,
-      uint256 missingX,
-      uint256 missingY
-    ) = _pairState(pool);
-    uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(
-      amountIn,
-      xToY,
-      currentReserveX,
-      currentReserveY,
-      referenceReserveX,
-      referenceReserveY,
-      missingX,
-      missingY
-    );
-
-    deal(tokenIn, address(this), amountIn);
-    tokenIn.safeTransfer(address(pool), amountIn);
-
-    uint256 balanceOutBefore = tokenOut.balanceOf(recipient);
-    if (xToY) {
-      pool.swap(0, expectedAmountOut, recipient, '');
+    uint32 lastLendingTimestamp = _lastLendingTimestamp(pool);
+    // 93,612 seconds reproduces the review's +72,000-second USDC/WETH window.
+    uint256 lendingElapsed = checkpointElapsed ? 93_612 : 40_000;
+    vm.warp(uint256(lastLendingTimestamp) + lendingElapsed);
+    uint32 actualLendingElapsed = uint32(block.timestamp) - lastLendingTimestamp;
+    if (checkpointElapsed) {
+      assertGe(actualLendingElapsed, INTEREST_PERIOD_FOR_SWAP);
     } else {
-      pool.swap(expectedAmountOut, 0, recipient, '');
+      assertLt(actualLendingElapsed, INTEREST_PERIOD_FOR_SWAP);
     }
 
+    (uint112 reserveX, uint112 reserveY,) = pool.getReserves();
+    uint256 reserveIn = xToY ? reserveX : reserveY;
+    amountIn = bound(amountIn, reserveIn / 10_000, reserveIn / 100);
+
+    uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(amountIn, pool, xToY);
+    uint256 checkpointedState = vm.snapshotState();
+
+    uint256 balanceOutBefore = tokenOut.balanceOf(recipient);
+    _swap(pool, tokenIn, amountIn, xToY, expectedAmountOut);
     assertEq(tokenOut.balanceOf(recipient) - balanceOutBefore, expectedAmountOut);
+
+    vm.revertToState(checkpointedState);
+    deal(tokenIn, address(this), amountIn);
+    tokenIn.safeTransfer(address(pool), amountIn);
+    bytes memory swapCall = xToY
+      ? abi.encodeCall(IAmmalgamPair.swap, (0, expectedAmountOut + 1, recipient, bytes('')))
+      : abi.encodeCall(IAmmalgamPair.swap, (expectedAmountOut + 1, 0, recipient, bytes('')));
+    (bool acceptsTooMuch,) = address(pool).call(swapCall);
+    assertFalse(acceptsTooMuch);
   }
 
-  function test_executeAmmalgam_quoteMatchesCheckpointedSwapMaximum() public {
-    vm.createSelectFork('mainnet', 26_181_593);
+  function test_executeAmmalgam_readsCheckpointStateAfterDataWasBuilt() public {
+    vm.createSelectFork('mainnet', CHECKPOINT_BLOCK_NUMBER);
     adapter = new AmmalgamAdapterHarness();
     IAmmalgamPair pool = IAmmalgamPair(USDC_WETH);
-    bytes32 lendingSlot = vm.load(address(pool), bytes32(uint256(17)));
-    uint32 lastLendingTimestamp = uint32(uint256(lendingSlot) >> 224);
-    vm.warp(block.timestamp + 72_000);
+    bytes memory data = abi.encode(address(pool));
 
     (, uint112 reserveY, uint32 lastUpdateTimestamp) = pool.getReserves();
+    uint32 lastLendingTimestamp = _lastLendingTimestamp(pool);
     uint256 amountIn = reserveY / 1000;
+    vm.warp(uint256(lastLendingTimestamp) + INTEREST_PERIOD_FOR_SWAP);
     uint32 currentTimestamp = uint32(block.timestamp);
-    assertGe(currentTimestamp - lastLendingTimestamp, 1 days - 1);
-    assertLt(currentTimestamp - lastUpdateTimestamp, 1 days - 1);
-
-    uint256 maxAmountOut = _maxAcceptedAmountOut(pool, amountIn);
-    uint256 directSwapSnapshot = vm.snapshotState();
-    deal(WETH, address(this), amountIn);
-    WETH.safeTransfer(address(pool), amountIn);
-    vm.recordLogs();
-    pool.swap(maxAmountOut, 0, recipient, '');
-    Vm.Log[] memory directSwapLogs = vm.getRecordedLogs();
-    (uint256 checkpointedReserveX, uint256 checkpointedReserveY, uint256 expectedSyncCount) =
-      _syncState(directSwapLogs, address(pool));
-    (uint112 expectedReferenceReserveX, uint112 expectedReferenceReserveY) =
-      pool.referenceReserves();
-    (uint112[6] memory checkpointedAssets,) = pool.totalAssetsAndShares(false);
-    uint256 checkpointedMissingX = checkpointedAssets[4] > checkpointedAssets[1]
-      ? checkpointedAssets[4] - checkpointedAssets[1]
-      : 0;
-    uint256 checkpointedMissingY = checkpointedAssets[5] > checkpointedAssets[2]
-      ? checkpointedAssets[5] - checkpointedAssets[2]
-      : 0;
-    vm.revertToState(directSwapSnapshot);
+    assertGe(currentTimestamp - lastLendingTimestamp, INTEREST_PERIOD_FOR_SWAP);
+    assertLt(currentTimestamp - lastUpdateTimestamp, INTEREST_PERIOD_FOR_SWAP);
 
     deal(WETH, address(adapter), amountIn);
     uint256 balanceOutBefore = USDC.balanceOf(recipient);
-    vm.recordLogs();
-    (, uint256 amountOut) = adapter.executeAmmalgam(
-      abi.encode(
-        address(pool),
-        checkpointedReserveX,
-        checkpointedReserveY,
-        expectedReferenceReserveX,
-        expectedReferenceReserveY,
-        checkpointedMissingX,
-        checkpointedMissingY
-      ),
-      amountIn,
-      WETH,
-      USDC,
-      recipient
-    );
-    Vm.Log[] memory adapterLogs = vm.getRecordedLogs();
-    (
-      uint256 actualCheckpointedReserveX,
-      uint256 actualCheckpointedReserveY,
-      uint256 actualSyncCount
-    ) = _syncState(adapterLogs, address(pool));
+    (, uint256 amountOut) = adapter.executeAmmalgam(data, amountIn, WETH, USDC, recipient);
 
-    assertEq(amountOut, maxAmountOut);
     assertEq(USDC.balanceOf(recipient) - balanceOutBefore, amountOut);
-    assertEq(actualSyncCount, expectedSyncCount);
-    assertEq(actualCheckpointedReserveX, checkpointedReserveX);
-    assertEq(actualCheckpointedReserveY, checkpointedReserveY);
-    (uint112 actualReferenceReserveX, uint112 actualReferenceReserveY) = pool.referenceReserves();
-    assertEq(actualReferenceReserveX, expectedReferenceReserveX);
-    assertEq(actualReferenceReserveY, expectedReferenceReserveY);
   }
 
-  function test_executeAmmalgam_revertsForIncompleteData() public {
-    vm.expectRevert(AmmalgamAdapter.InvalidDataLength.selector);
-    adapter.executeAmmalgam(abi.encode(USDC_WETH), 1, USDC, WETH, recipient);
+  function test_executeAmmalgam_revertsForShortData() public {
+    _expectInvalidData(new bytes(31));
   }
 
-  function _syncState(Vm.Log[] memory logs, address pool)
-    private
-    pure
-    returns (uint256 reserveX, uint256 reserveY, uint256 count)
-  {
-    bytes32 syncTopic = keccak256('Sync(uint256,uint256)');
-    for (uint256 i; i < logs.length; ++i) {
-      if (logs[i].emitter == pool && logs[i].topics[0] == syncTopic) {
-        if (count == 0) (reserveX, reserveY) = abi.decode(logs[i].data, (uint256, uint256));
-        ++count;
-      }
-    }
+  function test_executeAmmalgam_revertsForOverlongData() public {
+    _expectInvalidData(abi.encode(USDC_WETH, uint256(0)));
   }
 
-  function _maxAcceptedAmountOut(IAmmalgamPair pool, uint256 amountIn)
-    private
-    returns (uint256 amountOut)
-  {
-    (uint112 reserveX,,) = pool.getReserves();
-    uint256 high = reserveX - 1;
+  function test_executeAmmalgam_revertsForLegacyStateData() public {
+    _expectInvalidData(abi.encode(USDC_WETH, uint256(0), 0, 0, 0, 0, 0));
+  }
 
-    while (amountOut < high) {
-      uint256 candidate = (amountOut + high + 1) / 2;
-      uint256 snapshotId = vm.snapshotState();
+  function test_executeAmmalgam_readsStateAfterInterveningSwap() public {
+    IAmmalgamPair pool = IAmmalgamPair(USDC_WETH);
+    bytes memory data = abi.encode(address(pool));
+    (, uint112 reserveY,) = pool.getReserves();
+    uint256 firstAmountIn = reserveY / 2000;
+    uint256 secondAmountIn = reserveY / 1000;
 
-      deal(WETH, address(this), amountIn);
-      WETH.safeTransfer(address(pool), amountIn);
-      (bool success,) =
-        address(pool).call(abi.encodeCall(IAmmalgamPair.swap, (candidate, 0, recipient, bytes(''))));
+    uint256 firstAmountOut = adapter.computeExpectedSwapOutAmount(firstAmountIn, pool, false);
+    _swap(pool, WETH, firstAmountIn, false, firstAmountOut);
 
-      vm.revertToState(snapshotId);
-      if (success) {
-        amountOut = candidate;
-      } else {
-        high = candidate - 1;
-      }
-    }
+    deal(WETH, address(adapter), secondAmountIn);
+    uint256 balanceOutBefore = USDC.balanceOf(recipient);
+    (, uint256 amountOut) = adapter.executeAmmalgam(data, secondAmountIn, WETH, USDC, recipient);
+
+    assertEq(USDC.balanceOf(recipient) - balanceOutBefore, amountOut);
   }
 
   function testFuzz_executeAmmalgam_returnsQuotedAmount(
@@ -213,82 +141,49 @@ contract AmmalgamAdapterTest is Test {
   ) public {
     poolIndex = bound(poolIndex, 0, pools.length - 1);
     IAmmalgamPair pool = IAmmalgamPair(pools[poolIndex]);
-
     (address tokenX, address tokenY) = _tokens(poolIndex);
-    (uint112 reserveX, uint112 reserveY,) = pool.getReserves();
-
     address tokenIn = xToY ? tokenX : tokenY;
     address tokenOut = xToY ? tokenY : tokenX;
+    (uint112 reserveX, uint112 reserveY,) = pool.getReserves();
     uint256 reserveIn = xToY ? reserveX : reserveY;
-
     amountIn = bound(amountIn, reserveIn / 10_000, reserveIn / 100);
-    pool.sync();
-    (
-      uint256 currentReserveX,
-      uint256 currentReserveY,
-      uint256 referenceReserveX,
-      uint256 referenceReserveY,
-      uint256 missingX,
-      uint256 missingY
-    ) = _pairState(pool);
-    uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(
-      amountIn,
-      xToY,
-      currentReserveX,
-      currentReserveY,
-      referenceReserveX,
-      referenceReserveY,
-      missingX,
-      missingY
-    );
-    deal(tokenIn, address(adapter), amountIn);
 
-    vm.mockCall(
-      tokenOut, abi.encodeWithSignature('balanceOf(address)', recipient), abi.encode(uint256(0))
-    );
-    (uint256 amountUnused, uint256 amountOut) = adapter.executeAmmalgam(
-      abi.encode(
-        address(pool),
-        currentReserveX,
-        currentReserveY,
-        referenceReserveX,
-        referenceReserveY,
-        missingX,
-        missingY
-      ),
-      amountIn,
-      tokenIn,
-      tokenOut,
-      recipient
-    );
+    uint256 expectedAmountOut = adapter.computeExpectedSwapOutAmount(amountIn, pool, xToY);
+    deal(tokenIn, address(adapter), amountIn);
+    uint256 balanceOutBefore = tokenOut.balanceOf(recipient);
+    (uint256 amountUnused, uint256 amountOut) =
+      adapter.executeAmmalgam(abi.encode(address(pool)), amountIn, tokenIn, tokenOut, recipient);
 
     assertEq(amountUnused, 0);
     assertEq(amountOut, expectedAmountOut);
+    assertEq(tokenOut.balanceOf(recipient) - balanceOutBefore, amountOut);
     assertEq(tokenIn.balanceOf(address(adapter)), 0);
   }
 
-  function _pairState(IAmmalgamPair pool)
-    private
-    view
-    returns (
-      uint256 reserveX,
-      uint256 reserveY,
-      uint256 referenceReserveX,
-      uint256 referenceReserveY,
-      uint256 missingX,
-      uint256 missingY
-    )
-  {
-    (uint112 pairReserveX, uint112 pairReserveY,) = pool.getReserves();
-    (uint112 pairReferenceReserveX, uint112 pairReferenceReserveY) = pool.referenceReserves();
-    (uint112[6] memory allAssets,) = pool.totalAssetsAndShares(false);
+  function _lastLendingTimestamp(IAmmalgamPair pool) private view returns (uint32) {
+    bytes32 lendingSlot = vm.load(address(pool), bytes32(LAST_LENDING_TIMESTAMP_SLOT));
+    return uint32(uint256(lendingSlot) >> 224);
+  }
 
-    reserveX = pairReserveX;
-    reserveY = pairReserveY;
-    referenceReserveX = pairReferenceReserveX;
-    referenceReserveY = pairReferenceReserveY;
-    missingX = allAssets[4] > allAssets[1] ? allAssets[4] - allAssets[1] : 0;
-    missingY = allAssets[5] > allAssets[2] ? allAssets[5] - allAssets[2] : 0;
+  function _expectInvalidData(bytes memory data) private {
+    vm.expectRevert(AmmalgamAdapter.InvalidDataLength.selector);
+    adapter.executeAmmalgam(data, 0, WETH, USDC, recipient);
+  }
+
+  function _swap(
+    IAmmalgamPair pool,
+    address tokenIn,
+    uint256 amountIn,
+    bool xToY,
+    uint256 amountOut
+  ) private {
+    deal(tokenIn, address(this), amountIn);
+    tokenIn.safeTransfer(address(pool), amountIn);
+    if (xToY) {
+      pool.swap(0, amountOut, recipient, '');
+    } else {
+      pool.swap(amountOut, 0, recipient, '');
+    }
   }
 
   function _tokens(uint256 poolIndex) private pure returns (address tokenX, address tokenY) {
