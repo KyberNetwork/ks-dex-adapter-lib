@@ -60,7 +60,10 @@ contract EverlongFlammAdapterTest is Test {
     ) {
       (expectedUsed, expectedOut) = (used, out);
     } catch {
-      return; // the pool refuses this size; there is no fill for the adapter to reproduce
+      // The pool refuses this size, so there is no fill for the adapter to reproduce. Reject the
+      // seed rather than returning: a return would count toward the run budget and pass, so a
+      // state where every drawn size reverts would leave the adapter unexercised and green.
+      vm.assume(false);
     }
 
     (uint256 amountUnused, uint256 amountOut) = _execute(KIND_SWAP, amountIn, tokenIn, tokenOut);
@@ -81,7 +84,7 @@ contract EverlongFlammAdapterTest is Test {
     ) {
       (expectedUsed, expectedOut) = (used, out);
     } catch {
-      return;
+      vm.assume(false); // reject the seed, as in test_swap
     }
 
     (uint256 amountUnused, uint256 amountOut) = _execute(KIND_LEVER_UP, amountIn, CBBTC, USDC);
@@ -104,7 +107,7 @@ contract EverlongFlammAdapterTest is Test {
     ) {
       (expectedUsed, expectedOut) = (used, out);
     } catch {
-      return;
+      vm.assume(false); // reject the seed, as in test_swap
     }
 
     (uint256 amountUnused, uint256 amountOut) = _execute(KIND_LEVER_DOWN, amountIn, USDC, CBBTC);
