@@ -1,0 +1,39 @@
+Compiling 3 files with Solc 0.8.30
+Solc 0.8.30 finished in 3.54s
+Compiler run successful!
+
+Ran 17 tests for test/adapters/flywheel-fun/FlywheelNativeAdapter.t.sol:FlywheelNativeAdapterTest
+[PASS] testFuzz_nativeBuyKeepsDonations(uint96,uint96) (runs: 128, μ: 179497, ~: 180858)
+[PASS] testFuzz_refundNativeOrWrapped(uint96,bool) (runs: 128, μ: 194852, ~: 127306)
+[PASS] testFuzz_sellNativeOrWrapped(uint96,bool) (runs: 128, μ: 240334, ~: 222236)
+[PASS] test_delegatecallBuyAndSell() (gas: 441092)
+[PASS] test_directETHCallbackRejected() (gas: 33382)
+[PASS] test_erc20InputRejectsUnexpectedETH() (gas: 124748)
+[PASS] test_expiredRejected() (gas: 50007)
+[PASS] test_forwardingETHRecipient() (gas: 384498)
+[PASS] test_impossibleMinimumRollsBack() (gas: 69946)
+[PASS] test_recipientCannotReenterAndSpendResidualTokens() (gas: 1035687)
+[PASS] test_rejectedETHDeliveryRollsBack() (gas: 306238)
+[PASS] test_sellRefundRouteRejected() (gas: 118857)
+[PASS] test_settlementOutputLieRejected() (gas: 167110)
+[PASS] test_wrongChainRejected() (gas: 47764)
+[PASS] test_wrongFactoryRejected() (gas: 792689)
+[PASS] test_wrongPairRejected() (gas: 55214)
+[PASS] test_zeroMinimumRejected() (gas: 49869)
+Suite result: ok. 17 passed; 0 failed; 0 skipped; finished in 14.89ms (53.19ms CPU time)
+2026-10-07T04:16:49.398301Z  WARN foundry_fork_db::cache: Failed to read cache file err=Os { code: 2, kind: NotFound, message: "The system cannot find the file specified." } path="C:\\Users\\Spencer\\.foundry\\cache\\rpc\\robinhood\\82183340"
+
+Ran 10 tests for test/adapters/flywheel-fun/FlywheelNativeFork.t.sol:FlywheelNativeForkTest
+[PASS] testFork_boomerCurveRoundTrip() (gas: 1857680)
+[PASS] testFork_boomerGraduatedRoundTrip() (gas: 2039246)
+[PASS] testFork_curveGraduationRefund() (gas: 7081684)
+[PASS] testFork_delegatecallGraduationRefundAndSell() (gas: 7219742)
+[PASS] testFork_directCurveRejectedButAdapterWorks() (gas: 1930362)
+[PASS] testFork_directV4SwapRejectedButAdapterWorks() (gas: 2334514)
+[PASS] testFork_invalidExternalRouteReverts() (gas: 183128)
+[PASS] testFork_overfillWithoutRefundReverts() (gas: 6159648)
+[PASS] testFork_wethGraduatedRoundTrip() (gas: 1730743)
+[PASS] testFork_wrappedBoomerRoundTrip() (gas: 2228976)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 12.58s (46.21s CPU time)
+
+Ran 2 test suites in 12.59s (12.60s CPU time): 27 tests passed, 0 failed, 0 skipped (27 total tests)
