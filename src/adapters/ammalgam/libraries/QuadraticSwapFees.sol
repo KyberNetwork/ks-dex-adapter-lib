@@ -71,14 +71,12 @@ library QuadraticSwapFees {
     uint256 referenceReserve
   ) private pure returns (uint256 fee) {
     fee = MAX_QUADRATIC_FEE_PERCENT_BIPS
-      * (
-        TWO_Q64
-          - AmmalgamConvert.mulDiv(
-            referenceReserve,
-            MAX_QUADRATIC_FEE_Q64,
-            N * (input + RESERVE_MULTIPLIER * (currentReserve - referenceReserve)),
-            false
-          )
-      );
+      * (TWO_Q64
+        - AmmalgamConvert.mulDiv(
+          referenceReserve,
+          MAX_QUADRATIC_FEE_Q64,
+          N * (input + RESERVE_MULTIPLIER * (currentReserve - referenceReserve)),
+          false
+        ));
   }
 }
