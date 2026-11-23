@@ -242,8 +242,9 @@ contract AmmalgamMathTest is Test {
   }
 
   function _quote(uint256 missingIn) private pure returns (uint256 amountOut) {
-    return DepletedAssetUtils.computeExpectedSwapOutAmount(
-      1e18 + 1, 100e18, 100e18, 100e18, missingIn, 0
-    );
+    return
+      DepletedAssetUtils.computeExpectedSwapOutAmount(
+        1e18 + 1, 100e18, 100e18, 100e18, missingIn, 0
+      );
   }
 }
