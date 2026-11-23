@@ -18,6 +18,7 @@ contract AmmalgamAdapter {
   uint256 private constant DEPOSIT_Y = 2;
   uint256 private constant BORROW_X = 4;
   uint256 private constant BORROW_Y = 5;
+  uint32 private constant INTEREST_PERIOD_FOR_SWAP = 1 days - 1;
 
   /// @dev `data` is `abi.encode(pool)`.
   function executeAmmalgam(
@@ -28,6 +29,7 @@ contract AmmalgamAdapter {
     address recipient
   ) external payable returns (uint256 amountUnused, uint256 amountOut) {
     if (data.length != 32) revert InvalidDataLength();
+    amountUnused = 0;
 
     IAmmalgamPair pair = IAmmalgamPair(data.decodeAddress(0));
     bool xToY = tokenIn < tokenOut;
@@ -45,15 +47,18 @@ contract AmmalgamAdapter {
 
   function _computeExpectedSwapOutAmount(uint256 amountIn, IAmmalgamPair pair, bool xToY)
     internal
+    view
     returns (uint256 amountOut)
   {
-    // Apply pending observations and lending interest before reading the quote state. The
-    // subsequent swap sees the same checkpointed reserves, reference reserves, and missing assets.
-    pair.sync();
-
-    (uint112 reserveX, uint112 reserveY,) = pair.getReserves();
+    (uint112 reserveX, uint112 reserveY, uint32 lastLendingTimestamp) = pair.getReserves();
     (uint112 referenceReserveX, uint112 referenceReserveY) = pair.referenceReserves();
-    (uint256 missingX, uint256 missingY) = _pairMissingAssets(pair);
+
+    uint32 elapsed;
+    unchecked {
+      elapsed = uint32(block.timestamp) - lastLendingTimestamp;
+    }
+    (uint256 missingX, uint256 missingY) =
+      _pairMissingAssets(pair, elapsed >= INTEREST_PERIOD_FOR_SWAP);
 
     uint256 reserveIn = xToY ? reserveX : reserveY;
     uint256 reserveOut = xToY ? reserveY : reserveX;
@@ -66,12 +71,12 @@ contract AmmalgamAdapter {
     );
   }
 
-  function _pairMissingAssets(IAmmalgamPair pair)
+  function _pairMissingAssets(IAmmalgamPair pair, bool withInterest)
     private
     view
     returns (uint256 missingX, uint256 missingY)
   {
-    (uint112[6] memory allAssets,) = pair.totalAssetsAndShares(false);
+    (uint112[6] memory allAssets,) = pair.totalAssetsAndShares(withInterest);
     missingX = AmmalgamMath.max(allAssets[BORROW_X], allAssets[DEPOSIT_X]) - allAssets[DEPOSIT_X];
     missingY = AmmalgamMath.max(allAssets[BORROW_Y], allAssets[DEPOSIT_Y]) - allAssets[DEPOSIT_Y];
   }

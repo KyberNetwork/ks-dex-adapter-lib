@@ -50,13 +50,13 @@ library DepletedAssetUtils {
     uint256 missing
   ) private pure returns (uint256 calculatedBalance) {
     uint256 fee = QuadraticSwapFees.calculateSwapFeeBipsQ64(amountIn, reserve, referenceReserve);
+    uint256 feeAdjustedBalance =
+      balance - AmmalgamMath.ceilDiv(amountIn * fee, QuadraticSwapFees.BIPS_Q64);
 
-    if (balance * BUFFER < missing * BUFFER_NUMERATOR) {
-      calculatedBalance = ((balance - missing) * QuadraticSwapFees.BIPS_Q64 - amountIn * fee)
-        * BUFFER_NUMERATOR / QuadraticSwapFees.BIPS_Q64;
+    if (feeAdjustedBalance * BUFFER < missing * BUFFER_NUMERATOR) {
+      calculatedBalance = (feeAdjustedBalance - missing) * BUFFER_NUMERATOR;
     } else {
-      calculatedBalance =
-        (balance * QuadraticSwapFees.BIPS_Q64 - amountIn * fee) / QuadraticSwapFees.BIPS_Q64;
+      calculatedBalance = feeAdjustedBalance;
     }
   }
 

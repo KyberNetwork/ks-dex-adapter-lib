@@ -9,12 +9,12 @@ library QuadraticSwapFees {
   uint256 public constant BIPS_Q64 = 0x27100000000000000000;
 
   uint256 internal constant MAX_QUADRATIC_FEE_PERCENT = 40;
-  uint256 internal constant N = 20;
+  uint256 internal constant N = 40;
 
   uint256 private constant RESERVE_MULTIPLIER = 2;
-  uint256 private constant LINEAR_START_REFERENCE_SCALER = 4;
+  uint256 private constant LINEAR_START_REFERENCE_SCALER = 3;
   uint256 private constant MAX_QUADRATIC_FEE_PERCENT_BIPS = 4000;
-  uint256 private constant N_TIMES_BIPS_Q64_PER_PERCENT = 0x7d00000000000000000;
+  uint256 private constant N_TIMES_BIPS_Q64_PER_PERCENT = 0xfa00000000000000000;
   uint256 private constant TWO_Q64 = 0x20000000000000000;
   uint256 private constant MAX_QUADRATIC_FEE_Q64 = 0x280000000000000000;
 
@@ -39,7 +39,7 @@ library QuadraticSwapFees {
       } else if (currentReserveAfterSwap > referenceReserve) {
         uint256 pastBy = currentReserveAfterSwap - referenceReserve;
 
-        if (pastBy > RESERVE_MULTIPLIER * referenceReserve) {
+        if (pastBy > referenceReserve) {
           fee = calculateLinearFeeBipsQ64(pastBy, referenceReserve, referenceReserve);
         } else {
           fee = calculateQuadraticFeeBipsQ64(pastBy, referenceReserve, referenceReserve);
