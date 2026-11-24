@@ -58,9 +58,9 @@ No listing is registered on this front yet. The fork tests' door and block are n
 
 ## Tests
 
-Two fuzzed fork tests, one per mode (`test_door`, `test_front`), each over both directions of the listing's pair. A test draws a size, asks the door's own `quote` on the state it executes against, fills that size through the adapter and checks that the fill pays exactly the quote, takes the whole input and pays the recipient. A size the quote refuses is rejected and redrawn (`vm.assume(false)`), never counted as a run. The tests are skipped unless `RPC_1`, `EFFICIENT_PROP_DOOR` and `EFFICIENT_PROP_BLOCK` are set, the last a block in which the listing's maker's update landed: a fork at a block runs in that block's number and time, so the quote and the fill read that update.
+Two fuzzed fork tests, one per mode (`test_door`, `test_front`), each over both directions of a listing's pair. A test draws a door and a size, asks the door's own `quote` on the state it executes against, fills that size through the adapter and checks that the fill pays exactly the quote, takes the whole input, pays the recipient and leaves no allowance behind (to the door, the front or the paid pool). A size the quote refuses is rejected and redrawn (`vm.assume(false)`), never counted as a run. The tests are skipped unless `RPC_1`, `EFFICIENT_PROP_DOOR` and `EFFICIENT_PROP_BLOCK` are set, the last a block in which the listings' maker's update landed: a fork at a block runs in that block's number and time, so the quote and the fill read that update. `EFFICIENT_PROP_DOOR` takes one door or several separated by commas. Mode 1 takes one of two entries by the listing, so with two doors or more `test_front_coversBothEntries` checks that the set holds a listing the front names a pool for and one it names none for (a listing with a credit mode).
 
 ```sh
-RPC_1=<Ethereum RPC> EFFICIENT_PROP_DOOR=<door> EFFICIENT_PROP_BLOCK=<block> \
+RPC_1=<Ethereum RPC> EFFICIENT_PROP_DOOR=<door>[,<door>] EFFICIENT_PROP_BLOCK=<block> \
   forge test --match-path 'test/adapters/efficient-prop/*' -vv
 ```
