@@ -11,7 +11,7 @@ The front and its door factory have one address on every chain, each chain's own
 | Front (proxy) | `0x0000000000403aeB66691063CC2fD42E71d6AcD6` | [deployed](https://etherscan.io/address/0x0000000000403aeB66691063CC2fD42E71d6AcD6) | [deployed](https://basescan.org/address/0x0000000000403aeB66691063CC2fD42E71d6AcD6) | [deployed](https://bscscan.com/address/0x0000000000403aeB66691063CC2fD42E71d6AcD6) |
 | Listing-door factory | `0x39eD9993449C96503f6a629cCD2BB5F132D7cc93` | [deployed](https://etherscan.io/address/0x39eD9993449C96503f6a629cCD2BB5F132D7cc93) | [deployed](https://basescan.org/address/0x39eD9993449C96503f6a629cCD2BB5F132D7cc93) | [deployed](https://bscscan.com/address/0x39eD9993449C96503f6a629cCD2BB5F132D7cc93) |
 
-Ethereum and BNB Chain run the builder build, where a maker's update lands only in a block a builder builds with it. Base runs the storage build, where a maker's word stands in storage until it ends. On 25 Nov 2026 Base's front had no listing (block 62,193,110), and BNB Chain's front (since block 135,698,348) and door factory (since 135,700,303) had no pool and no listing yet.
+Ethereum and BNB Chain run the builder build, where a maker's update lands only in a block a builder builds with it. Base runs the storage build, where a maker's word stands in storage until it ends.
 
 ## Data and fill modes
 
